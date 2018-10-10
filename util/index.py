@@ -186,6 +186,7 @@ class InvertedIndex(object):
             word = self._lexicon[word.id]
         else:
             word = self._lexicon[word]
+        
         if word.offset < 0:
             return deque()
         assert word.offset < self._mmap.size(), \

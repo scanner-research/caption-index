@@ -28,7 +28,6 @@ def main(index_dir, query):
             results = index.unigram_search(text)
         except Exception as e:
             traceback.print_exc()
-            print(e)
             return
 
         for d in results:
