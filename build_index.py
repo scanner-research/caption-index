@@ -280,13 +280,12 @@ def merge_reverse_indexes(ridx_dir, lexicon, out_path):
 
     jump_offsets = [-1] * len(lexicon)
     with open(out_path, 'wb') as f, tqdm(total=len(lexicon)) as pbar:
+        pbar.set_description('Merging indexes')
+
         for i in range(len(lexicon)):
             if len(token_parsers_pq) == 0:
                 break
             token_id = token_parsers_pq[0].token
-            pbar.set_description(
-                'Merging indexes ("{}")'.format(lexicon[token_id].token))
-            pbar.update(1)
             jump_offsets[token_id] = f.tell()
 
             doc_parsers_pq = []
@@ -316,6 +315,8 @@ def merge_reverse_indexes(ridx_dir, lexicon, out_path):
                 else:
                     # Return to docs queue
                     heapq.heappush(doc_parsers_pq, p)
+
+            pbar.update(1)
 
     return jump_offsets
 
