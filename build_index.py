@@ -8,6 +8,7 @@ import os
 import shutil
 from collections import defaultdict, deque, namedtuple, Counter
 from multiprocessing import Pool
+from subprocess import check_call
 from threading import Lock
 from tqdm import tqdm
 
@@ -194,10 +195,13 @@ class MergeIndexParser(object):
 
     ParsedDocument = namedtuple('ParsedDocument', ['id', 'n', 'data'])
 
-    def __init__(self, path):
+    def __init__(self, path, min_token, max_token):
+        """Min and max are INCLUSIVE"""
         self._path = path
+        self._min_token = min_token
+        self._max_token = max_token
         self._f = open(path, 'rb')
-        self._eof = False
+        self._done = False
         self._curr_token = None
         self._curr_doc = None
         self._curr_n_docs = None
@@ -210,34 +214,47 @@ class MergeIndexParser(object):
 
     @property
     def token(self):
-        return self._curr_token if not self._eof else None
+        return self._curr_token if not self._done else None
 
     @property
     def ndocs(self):
-        assert not self._eof, 'EOF already reached'
+        assert not self._done, 'EOF already reached'
         return self._curr_n_docs
 
     @property
     def doc(self):
-        assert not self._eof, 'EOF already reached'
+        assert not self._done, 'EOF already reached'
         return self._curr_doc
 
+    def close(self):
+        self._f.close()
+        self._done = True
+        self._curr_token = None
+        self._curr_n_docs = None
+        self._curr_n_docs_left = None
+
     def next_token(self):
-        assert not self._eof, 'EOF already reached'
+        assert not self._done, 'EOF already reached'
         assert self._curr_n_docs_left == 0, 'Not done processing docs'
-        token_data = self._f.read(DATUM_SIZE)
-        if len(token_data) == 0:
-            self._f.close()
-            self._eof = True
-            self._curr_token = None
-            self._curr_n_docs = None
-            self._curr_n_docs_left = None
-        else:
-            self._curr_token = decode_datum(token_data)
+        while True:
+            token_data = self._f.read(DATUM_SIZE)
+            if len(token_data) == 0:
+                self._close()
+                break
+            next_token = decode_datum(token_data)
+            if next_token > self._max_token:
+                self._close()
+                break
+
+            self._curr_token = next_token
             self._curr_n_docs = decode_datum(self._f.read(DATUM_SIZE))
             self._curr_n_docs_left = self._curr_n_docs
             assert self._curr_n_docs > 0, 'Token cannot have no docs'
-            assert self.next_doc() is not None
+            if self._curr_token < self._min_token:
+                self.skip_docs()
+            else:
+                assert self.next_doc() is not None
+                break
         return self.token
 
     def next_doc(self):
@@ -256,6 +273,16 @@ class MergeIndexParser(object):
                 id=doc_id, n=n_postings, data=postings_data)
         return self.doc
 
+    def skip_docs(self):
+        assert self._curr_n_docs_left >= 0
+        while self._curr_n_docs_left > 0:
+            self._f.seek(DATUM_SIZE, whence=1)
+            n_postings = decode_datum(self._f.read(DATUM_SIZE))
+            postings_len = n_postings * DATUM_SIZE * 3
+            assert n_postings > 0, 'Empty postings list'
+            self._f.seek(postings_len, whence=1)
+            self._curr_n_docs_left -= 1
+
     def __lt__(self, o):
         # For priority queuing
         if self.token == o.token:
@@ -263,12 +290,14 @@ class MergeIndexParser(object):
         return self.token < o.token
 
 
-def merge_inv_indexes(idx_paths, out_path):
+def merge_inv_indexes(idx_paths, out_path, min_token, max_token):
     lexicon = WORKER_LEXICON
 
     token_parsers_pq = []
     for path in idx_paths:
-        heapq.heappush(token_parsers_pq, MergeIndexParser(path))
+        p = MergeIndexParser(path, min_token, max_token - 1)
+        if p.token is not None:
+            heapq.heappush(token_parsers_pq, p)
 
     jump_offsets = [-1] * len(lexicon)
     with open(out_path, 'wb') as f:
@@ -310,8 +339,7 @@ def merge_inv_indexes(idx_paths, out_path):
     return jump_offsets
 
 
-def parallel_merge_inv_indexes(idx_dir, lexicon, out_path, tmp_dir,
-                               batch_size=50):
+def parallel_merge_inv_indexes(idx_dir, lexicon, out_path, tmp_dir):
     assert isinstance(lexicon, Lexicon)
     global WORKER_LEXICON
     WORKER_LEXICON = lexicon
@@ -325,42 +353,41 @@ def parallel_merge_inv_indexes(idx_dir, lexicon, out_path, tmp_dir,
             for x in os.listdir(idx_dir) if x.endswith('.bin')
         ]
 
-        def total_steps(n):
-            if n <= batch_size:
-                return 1
-            parts = math.ceil(n / batch_size)
-            return parts + total_steps(parts)
-
-        with tqdm(total=total_steps(len(idx_paths))) as pbar:
+        with tqdm(total=N_WORKERS) as pbar:
             pbar.set_description('Merging indexes')
 
             def progress(ignored):
                 pbar.update(1)
 
-            if N_WORKERS > 1:
-                with Pool(processes=N_WORKERS) as pool:
-                    tmp_file_no = 0
-                    while len(idx_paths) > batch_size:
-                        new_idx_paths = []
-                        async_results = []
-                        for i in range(0, len(idx_paths), batch_size):
-                            new_idx_path = os.path.join(tmp_dir, '{}.bin'.format(tmp_file_no))
-                            tmp_file_no += 1
+            with Pool(processes=N_WORKERS + 1) as pool:
+                worker_args = []
+                tokens_per_worker = math.ceil(len(lexicon) / N_WORKERS)
 
-                            async_results.append(
-                                pool.apply_async(
-                                    merge_inv_indexes,
-                                    (idx_paths[i:i + batch_size], new_idx_path),
-                                    callback=progress))
-                            new_idx_paths.append(new_idx_path)
+                # Partition across the lexicon
+                for file_no, i in enumerate(range(0, len(lexicon),
+                                            tokens_per_worker)):
+                    new_idx_path = os.path.join(tmp_dir, '{}.bin'.format(file_no))
+                    worker_args.append(
+                        (idx_paths, new_idx_path, i, i + tokens_per_worker))
 
-                        for async in async_results:
-                            async.wait()
-                            assert async.successful()
-                        idx_paths = new_idx_paths
+                results = pool.starmap_async(
+                    merge_inv_indexes, worker_args,
+                    callback=progress)
 
-            jump_offsets = merge_inv_indexes(idx_paths, out_path)
-            pbar.update(1)
+                # Cat the files together
+                idx_paths = [x for _, x, _, _ in worker_args]
+                with open(out_path, 'wb') as f:
+                    check_call(['cat'] + [idx_paths], stdout=f)
+
+                # Merge the jump offsets
+                jump_offsets = [-1] * len(lexicon)
+                global_offset = 0
+                for i, worker_args in enumerate(worker_args):
+                    _, result_path, min_token, max_token = worker_args
+                    worker_result = results[i]
+                    for t in range(min_token, max_token):
+                        jump_offsets[t] = global_offset + worker_result[t]
+                    global_offset += os.path.getsize(result_path)
 
             if -1 in jump_offsets:
                 print('Warning: not all lexicon words have been indexed')
