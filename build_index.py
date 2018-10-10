@@ -1,41 +1,34 @@
 #!/usr/bin/env python3
 
 import argparse
-import os
-import pysrt
 import heapq
-from tqdm import tqdm
-from threading import Lock
-from multiprocessing import Pool
+import pysrt
+import os
 from collections import defaultdict, namedtuple, Counter
+from multiprocessing import Pool
+from threading import Lock
+from tqdm import tqdm
 
-from util.index import tokenize, Lexicon, Documents
+from util.index import tokenize, Lexicon, Documents, \
+    encode_datum, decode_datum, DATUM_SIZE
+
+
+DEFAULT_OUT_DIR = 'out'
+DEFAULT_WORKERS = os.cpu_count()
 
 
 N_WORKERS = None
 
-ENDIAN = 'little'
-DATUM_SIZE = 4
-MAX_INT = 2 ** (DATUM_SIZE * 8) - 1
-
-
-def encode_datum(i):
-    assert isinstance(i, int)
-    assert i >= 0 and i <= MAX_INT, 'Out of range: {}'.format(i)
-    return (i).to_bytes(DATUM_SIZE, ENDIAN)
-
-
-def decode_datum(s):
-    assert len(s) == DATUM_SIZE, '{} is too short'.format(len(s))
-    return int.from_bytes(s, ENDIAN)
-
 
 def get_args():
     p = argparse.ArgumentParser()
-    p.add_argument('doc_dir', type=str)
-    p.add_argument('-o', dest='out_dir', type=str, default='build')
-    p.add_argument('-j', dest='workers', type=int, default=os.cpu_count())
-    p.add_argument('--limit', dest='limit', type=int)
+    p.add_argument('doc_dir', type=str, help='Directory containing transcripts')
+    p.add_argument('-o', dest='out_dir', type=str, default=DEFAULT_OUT_DIR,
+                   help='Output directory. Default: {}'.format(DEFAULT_OUT_DIR))
+    p.add_argument('-j', dest='workers', type=int, default=DEFAULT_WORKERS,
+                   help='Number of CPU cores to use. Default: {}'.format(DEFAULT_WORKERS))
+    p.add_argument('--limit', dest='limit', type=int,
+                   help='Number of documents to parse. Default: None')
     return p.parse_args()
 
 
@@ -96,47 +89,49 @@ def get_words(doc_dir, docs):
     return words
 
 
-def reverse_index_single_doc(doc_path, lexicon):
+def inv_index_single_doc(doc_path, lexicon):
     assert isinstance(lexicon, Lexicon)
 
-    doc_rindex = defaultdict(list)
+    doc_inv_index = defaultdict(list)
     try:
         subs = load_srt(doc_path)
         doc_position = 0
         for s in subs:
             start, end = s.start.ordinal, s.end.ordinal
             for t in tokenize(s.text):
-                token = lexicon[t]
-                if token is None:
-                    print('Unknown token: {}'.format(t))
-                else:
-                    doc_rindex[token.id].append((doc_position, start, end))
-                doc_position += 1
+                try:
+                    try:
+                        token = lexicon[t]
+                    except KeyError:
+                        print('Unknown token: {}'.format(t))
+                    doc_inv_index[token.id].append((doc_position, start, end))
+                finally:
+                    doc_position += 1
     except Exception as e:
         print(e)
-    return doc_rindex
+    return doc_inv_index
 
 
 # Hack to get around sharing args beween processes workers
 WORKER_LEXICON = None
 
 
-def reverse_index_batch(doc_batch, out_path):
+def inv_index_batch(doc_batch, out_path):
     lexicon = WORKER_LEXICON
 
     assert isinstance(out_path, str)
     assert isinstance(lexicon, Lexicon)
 
-    batch_rindex = defaultdict(list)     # token -> [(doc, [postings])]
+    batch_inv_index = defaultdict(list)     # token -> [(doc, [postings])]
     for doc_id, doc_path in doc_batch:
-        doc_index = reverse_index_single_doc(doc_path, lexicon)
+        doc_index = inv_index_single_doc(doc_path, lexicon)
         for token_id, postings in doc_index.items():
-            batch_rindex[token_id].append((doc_id, postings))
+            batch_inv_index[token_id].append((doc_id, postings))
 
     with open(out_path, 'wb') as f:
         # Order by increasing token_id
-        for token_id in sorted(batch_rindex):
-            docs = batch_rindex[token_id]
+        for token_id in sorted(batch_inv_index):
+            docs = batch_inv_index[token_id]
             assert len(docs) > 0
 
             f.write(encode_datum(token_id))    # Token id
@@ -179,11 +174,11 @@ def reverse_index_all_docs(doc_dir, docs, lexicon, out_dir, batch_size=100):
 
             if N_WORKERS > 1:
                 async_results.append(pool.apply_async(
-                    reverse_index_batch,
+                    inv_index_batch,
                     (doc_batch, out_path),
                     callback=progress))
             else:
-                progress(reverse_index_batch(doc_batch, out_path))
+                progress(inv_index_batch(doc_batch, out_path))
 
         for async in async_results:
             async.wait()
@@ -195,7 +190,7 @@ def reverse_index_all_docs(doc_dir, docs, lexicon, out_dir, batch_size=100):
 
 class MergeIndexParser(object):
 
-    Document = namedtuple('Document', ['id', 'n', 'data'])
+    ParsedDocument = namedtuple('ParsedDocument', ['id', 'n', 'data'])
 
     def __init__(self, path):
         self._path = path
@@ -217,16 +212,16 @@ class MergeIndexParser(object):
 
     @property
     def ndocs(self):
-        assert not self._eof, 'EOF already read'
+        assert not self._eof, 'EOF already reached'
         return self._curr_n_docs
 
     @property
     def doc(self):
-        assert not self._eof, 'EOF already read'
+        assert not self._eof, 'EOF already reached'
         return self._curr_doc
 
     def next_token(self):
-        assert not self._eof, 'EOF already read'
+        assert not self._eof, 'EOF already reached'
         assert self._curr_n_docs_left == 0, 'Not done processing docs'
         token_data = self._f.read(DATUM_SIZE)
         if len(token_data) == 0:
@@ -236,9 +231,8 @@ class MergeIndexParser(object):
             self._curr_n_docs = None
             self._curr_n_docs_left = None
         else:
-            ndocs_data = self._f.read(DATUM_SIZE)
             self._curr_token = decode_datum(token_data)
-            self._curr_n_docs = decode_datum(ndocs_data)
+            self._curr_n_docs = decode_datum(self._f.read(DATUM_SIZE))
             self._curr_n_docs_left = self._curr_n_docs
             assert self._curr_n_docs > 0, 'Token cannot have no docs'
             assert self.next_doc() is not None
@@ -256,7 +250,7 @@ class MergeIndexParser(object):
             postings_len = n_postings * DATUM_SIZE * 3  # (position, start, end)
             postings_data = self._f.read(postings_len)
             assert len(postings_data) == postings_len, 'Invalid read'
-            self._curr_doc = MergeIndexParser.Document(
+            self._curr_doc = MergeIndexParser.ParsedDocument(
                 id=doc_id, n=n_postings, data=postings_data)
         return self.doc
 
@@ -267,15 +261,15 @@ class MergeIndexParser(object):
         return self.token == o.token
 
 
-def merge_reverse_indexes(ridx_dir, lexicon, out_path):
+def merge_inv_indexes(inv_idx_dir, lexicon, out_path):
     assert isinstance(lexicon, Lexicon)
 
-    ridx_paths = [
-        os.path.join(ridx_dir, x)
-        for x in os.listdir(ridx_dir) if x.endswith('.bin')
+    inv_idx_paths = [
+        os.path.join(inv_idx_dir, x)
+        for x in os.listdir(inv_idx_dir) if x.endswith('.bin')
     ]
     token_parsers_pq = []
-    for path in ridx_paths:
+    for path in inv_idx_paths:
         heapq.heappush(token_parsers_pq, MergeIndexParser(path))
 
     jump_offsets = [-1] * len(lexicon)
@@ -347,7 +341,8 @@ def main(doc_dir, out_dir, workers, limit=None):
         lexicon.store(lex_path)
         del wordcounts
 
-    doc_list_path = os.path.join(out_dir, 'documents.txt')
+    # Save the document list
+    doc_list_path = os.path.join(out_dir, 'docs.list')
     docs.store(doc_list_path)
 
     chunk_dir = os.path.join(out_dir, 'parts')
@@ -358,7 +353,7 @@ def main(doc_dir, out_dir, workers, limit=None):
         print('Exists: {}'.format(chunk_dir))
 
     idx_path = os.path.join(out_dir, 'index.bin')
-    jump_offsets = merge_reverse_indexes(chunk_dir, lexicon, idx_path)
+    jump_offsets = merge_inv_indexes(chunk_dir, lexicon, idx_path)
 
     # Resave the lexicon with offsets
     lexicon = Lexicon([
