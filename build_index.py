@@ -173,7 +173,7 @@ def reverse_index_all_docs(doc_dir, docs, lexicon, out_dir, batch_size=100):
         for base_id in range(0, len(docs), batch_size):
             doc_batch = [
                 (i, os.path.join(doc_dir, docs[i]))
-                for i in range(base_id, base_id + batch_size)
+                for i in range(base_id, min(base_id + batch_size, len(docs)))
             ]
             out_path = os.path.join(out_dir, '{}.bin'.format(base_id))
 
