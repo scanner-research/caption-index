@@ -13,7 +13,8 @@ from threading import Lock
 from tqdm import tqdm
 
 from util.index import tokenize, Lexicon, Documents, \
-    encode_datum, decode_datum, DATUM_SIZE
+    encode_datum, decode_datum, encode_time_int, \
+    DATUM_SIZE, TIME_INT_SIZE, MAX_TIME_INT_VALUE
 
 
 DEFAULT_OUT_DIR = 'out'
@@ -105,6 +106,12 @@ def inv_index_single_doc(doc_path, lexicon):
         doc_position = 0
         for s in subs:
             start, end = s.start.ordinal, s.end.ordinal
+            if start > end:
+                print('Warning: start time > end time ({} > {})'.format(start, end))
+                end = start
+            if end - start > MAX_TIME_INT_VALUE:
+                print('Warning: end - start > {}ms'.format(MAX_TIME_INT_VALUE))
+                end = start + MAX_TIME_INT_VALUE
             for t in tokenize(s.text):
                 try:
                     try:
@@ -147,9 +154,8 @@ def inv_index_batch(doc_batch, out_path):
                 assert len(postings) > 0
 
                 for (position, start, end) in postings:
-                    f.write(encode_datum(position))    # Position in document
-                    f.write(encode_datum(start))       # Start time in ms
-                    f.write(encode_datum(end))         # End time in ms
+                    f.write(encode_datum(position))
+                    f.write(encode_time_int(start, end))
 
     return len(doc_batch)
 
@@ -260,7 +266,7 @@ class MergeIndexParser(object):
             doc_id = decode_datum(self._f.read(DATUM_SIZE))
             n_postings = decode_datum(self._f.read(DATUM_SIZE))
             assert n_postings > 0, 'Empty postings list'
-            postings_len = n_postings * DATUM_SIZE * 3  # (position, start, end)
+            postings_len = n_postings * (DATUM_SIZE + TIME_INT_SIZE)
             postings_data = self._f.read(postings_len)
             assert len(postings_data) == postings_len, 'Invalid read'
             self._curr_doc = MergeIndexParser.ParsedDocument(
@@ -272,7 +278,7 @@ class MergeIndexParser(object):
         while self._curr_n_docs_left > 0:
             self._f.seek(DATUM_SIZE, 1)
             n_postings = decode_datum(self._f.read(DATUM_SIZE))
-            postings_len = n_postings * DATUM_SIZE * 3
+            postings_len = n_postings * (DATUM_SIZE + TIME_INT_SIZE)
             assert n_postings > 0, 'Empty postings list'
             self._f.seek(postings_len, 1)
             self._curr_n_docs_left -= 1
@@ -429,7 +435,11 @@ def main(doc_dir, out_dir, workers, limit=None):
     chunk_dir = os.path.join(out_dir, 'parts')
     if not os.path.exists(chunk_dir):
         os.makedirs(chunk_dir)
-        inv_index_all_docs(doc_dir, docs, lexicon, chunk_dir)
+        try:
+            inv_index_all_docs(doc_dir, docs, lexicon, chunk_dir)
+        except:
+            shutil.rmtree(chunk_dir)
+            raise
     else:
         print('Found existing indexes: {}'.format(chunk_dir))
 

@@ -105,13 +105,47 @@ class Documents(object):
 
 
 ENDIAN = 'little'
-DATUM_SIZE = 4
-MAX_INT = 2 ** (DATUM_SIZE * 8) - 1
+
+# Time interval encoding
+START_TIME_SIZE = 4
+END_TIME_SIZE = 2
+TIME_INT_SIZE = START_TIME_SIZE + END_TIME_SIZE
+MAX_TIME_INT_VALUE = 2 ** (8 * (START_TIME_SIZE - END_TIME_SIZE)) - 1
+
+
+def encode_time_int(start, end):
+    assert isinstance(start, int)
+    assert isinstance(end, int)
+    diff = end - start
+    if diff < 0:
+        raise ValueError('start cannot exceed end: {} > {}'.format(start, end))
+    if diff > MAX_TIME_INT_VALUE:
+        raise ValueError('end - start > {}'.format(MAX_TIME_INT_VALUE))
+    return (start).to_bytes(START_TIME_SIZE, ENDIAN) + (diff).to_bytes(END_TIME_SIZE, ENDIAN)
+
+
+def decode_time_int(s):
+    assert len(s) == TIME_INT_SIZE
+    start = int.from_bytes(s[:START_TIME_SIZE], ENDIAN)
+    diff = int.from_bytes(s[START_TIME_SIZE:], ENDIAN)
+    return start, start + diff
+
+
+def mmap_decode_time_int(mm, i):
+    return decode_time_int(mm[i:i + TIME_INT_SIZE])
+
+
+# Everything except time intervals are datums
+DATUM_SIZE = 3
+MAX_DATUM_VALUE = 2 ** (DATUM_SIZE * 8) - 1
 
 
 def encode_datum(i):
     assert isinstance(i, int)
-    assert i >= 0 and i <= MAX_INT, 'Out of range: {}'.format(i)
+    if i < 0:
+        raise ValueError('Out of range: {} < 0'.format(i))
+    if i > MAX_DATUM_VALUE:
+        raise ValueError('Out of range: {} > {}'.format(i, MAX_DATUM_VALUE))
     return (i).to_bytes(DATUM_SIZE, ENDIAN)
 
 
@@ -120,9 +154,8 @@ def decode_datum(s):
     return int.from_bytes(s, ENDIAN)
 
 
-def mmap_decode_datum(mm, base_ofs, i=0):
-    ofs = base_ofs + i * DATUM_SIZE
-    return decode_datum(mm[ofs:ofs + DATUM_SIZE])
+def mmap_decode_datum(mm, i):
+    return decode_datum(mm[i:i + DATUM_SIZE])
 
 
 def millis_to_seconds(t):
@@ -192,43 +225,46 @@ class InvertedIndex(object):
         assert word.offset < self._mmap.size(), \
             'Offset exceeds file length: {} > {}'.format(word.offset, self._mmap.size())
 
-        base_offset = word.offset
+        curr_offset = word.offset
 
-        def mm_read(i):
-            return mmap_decode_datum(self._mmap, base_offset, i)
+        def mm_datum(i):
+            return mmap_decode_datum(self._mmap, i)
 
-        data_idx = 0
-        word_id = mm_read(data_idx)
+        def mm_time_int(i):
+            return mmap_decode_time_int(self._mmap, i)
+
+        word_id = mm_datum(curr_offset)
         assert word_id == word.id, \
             'Expected word id {}, got {}'.format(word.id, word_id)
+        curr_offset += DATUM_SIZE
 
-        data_idx += 1
-        doc_count = mm_read(data_idx)
+        doc_count = mm_datum(curr_offset)
         assert doc_count > 0, 'Expected at least one document'
         assert doc_count < len(self._documents), 'Uh oh... too many documents: {}'.format(doc_count)
+        curr_offset += DATUM_SIZE
 
         result = deque()
 
         prev_doc_id = None
         for _ in range(doc_count):
-            data_idx += 1
-            doc_id = mm_read(data_idx)
+            doc_id = mm_datum(curr_offset)
             assert prev_doc_id is None or doc_id > prev_doc_id, \
                 'Uh oh... document ids should be ascending, but {} <= {}'.format(doc_id, prev_doc_id)
+            curr_offset += DATUM_SIZE
 
-            data_idx += 1
-            posting_count = mm_read(data_idx)
+            posting_count = mm_datum(curr_offset)
             assert posting_count > 0, 'Expected at least one posting'
+            curr_offset += DATUM_SIZE
 
             d = InvertedIndex.Document(id=doc_id, entries=deque())
             for _ in range(posting_count):
-                data_idx += 1
-                position = mm_read(data_idx)
-                data_idx += 1
-                start = millis_to_seconds(mm_read(data_idx))
-                data_idx += 1
-                end = millis_to_seconds(mm_read(data_idx))
-                d.entries.append(InvertedIndex.Entry(position, start, end))
+                position = mm_datum(curr_offset)
+                curr_offset += DATUM_SIZE
+                start, end = mm_time_int(curr_offset)
+                curr_offset += TIME_INT_SIZE
+                d.entries.append(InvertedIndex.Entry(
+                    position, millis_to_seconds(start),
+                    millis_to_seconds(end)))
             result.append(d)
             prev_doc_id = doc_id
         return result
