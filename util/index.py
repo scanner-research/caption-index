@@ -4,7 +4,7 @@ Inverted index for srt files.
 
 import nltk
 import mmap
-from collections import namedtuple
+from collections import namedtuple, deque
 
 
 def tokenize(s):
@@ -26,21 +26,18 @@ class Lexicon(object):
         return self._words.__iter__()
 
     def __getitem__(self, key):
-        try:
-            if isinstance(key, int):
-                # Get word by id
-                return self._words[key]
-            elif isinstance(key, str):
-                # Get word by token
-                return self._inverse[key]
-        except (IndexError, KeyError) as e:
-            raise KeyError(e)
-        raise NotImplementedError('Not supported for {}'.format(type(key)))
+        if isinstance(key, int):
+            # Get word by id (IndexError)
+            return self._words[key]
+        elif isinstance(key, str):
+            # Get word by token (KeyError)
+            return self._inverse[key]
+        raise TypeError('Not supported for {}'.format(type(key)))
 
     def __contains__(self, key):
         try:
             self.__getitem__(key)
-        except KeyError:
+        except (KeyError, IndexError):
             return False
         return True
 
@@ -74,19 +71,16 @@ class Documents(object):
         return self._docs.__iter__()
 
     def __getitem__(self, key):
-        try:
-            if isinstance(key, int):
-                # Get doc name by id
-                return self._docs[key]
-            elif isinstance(key, str):
-                # Get doc id by name
-                index = self._docs.index(key)
-                if index < 0:
-                    raise KeyError('no document with name {}'.format(key))
-                return index
-        except (KeyError, IndexError) as e:
-            raise KeyError(e)
-        raise NotImplementedError('Not supported for {}'.format(type(key)))
+        if isinstance(key, int):
+            # Get doc name by id (IndexError)
+            return self._docs[key]
+        elif isinstance(key, str):
+            # Get doc id by name (KeyError)
+            try:
+                return self._docs.index(key)
+            except ValueError as e:
+                raise KeyError(e)
+        raise TypeError('Not supported for {}'.format(type(key)))
 
     def __contains__(self, key):
         try:
@@ -127,7 +121,7 @@ def decode_datum(s):
 
 
 def mmap_decode_datum(mm, base_ofs, i=0):
-    ofs = base_ofs + i
+    ofs = base_ofs + i * DATUM_SIZE
     return decode_datum(mm[ofs:ofs + DATUM_SIZE])
 
 
@@ -163,17 +157,39 @@ class InvertedIndex(object):
             self._f = None
 
     def search(self, text):
-        raise NotImplementedError()
+        if isinstance(text, str):
+            tokens = tokenize(text.strip())
+            if len(tokens) == 0:
+                raise ValueError('No words in input')
+            for t in tokens:
+                if t not in self._lexicon:
+                    raise ValueError('{} is not in the lexicon'.format(t))
+        elif isinstance(list):
+            tokens = text
+            if len(tokens) == 0:
+                raise ValueError('No words in input')
+        return self.ngram_search(*tokens)
 
-    def unigram_search(self, key):
-        if isinstance(key, Lexicon.Word):
-            word = self._lexicon[key.id]
+    # TODO: there are more optimized ways to do this
+    def ngram_search(self, first_word, *other_words):
+        partial_result = self.unigram_search(first_word)
+        for i, next_word in enumerate(other_words):
+            next_result = self.unigram_search(next_word)
+            partial_result = InvertedIndex._merge_results(
+                partial_result, next_result, i + 1)
+            if len(partial_result) == 0:
+                break
+        return partial_result
+
+    def unigram_search(self, word):
+        if isinstance(word, Lexicon.Word):
+            word = self._lexicon[word.id]
         else:
-            word = self._lexicon[key]
+            word = self._lexicon[word]
         if word.offset < 0:
-            return []
+            return deque()
         assert word.offset < self._mmap.size(), \
-            'Offset exceeds file length: {}'.format(word.offset)
+            'Offset exceeds file length: {} > {}'.format(word.offset, self._mmap.size())
 
         base_offset = word.offset
 
@@ -190,7 +206,7 @@ class InvertedIndex(object):
         assert doc_count > 0, 'Expected at least one document'
         assert doc_count < len(self._documents), 'Uh oh... too many documents: {}'.format(doc_count)
 
-        result = []
+        result = deque()
 
         prev_doc_id = None
         for _ in range(doc_count):
@@ -203,7 +219,7 @@ class InvertedIndex(object):
             posting_count = mm_read(data_idx)
             assert posting_count > 0, 'Expected at least one posting'
 
-            d = InvertedIndex.Document(id=doc_id, entries=[])
+            d = InvertedIndex.Document(id=doc_id, entries=deque())
             for _ in range(posting_count):
                 data_idx += 1
                 position = mm_read(data_idx)
@@ -216,5 +232,30 @@ class InvertedIndex(object):
             prev_doc_id = doc_id
         return result
 
-    def ngram_search(self, keys):
-        raise NotImplementedError()
+    @staticmethod
+    def _merge_results(a, b, gap):
+        """Overlap sorted results for ngrams"""
+        result = deque()
+        while len(a) > 0 and len(b) > 0:
+            if a[0].id == b[0].id:
+                # Merge within a document
+                d = None
+                while len(a[0].entries) > 0 and len(b[0].entries) > 0:
+                    a_ent = a[0].entries[0]
+                    b_ent = b[0].entries[0]
+                    if a_ent.position + gap == b_ent.position:
+                        if d is None:
+                            d = InvertedIndex.Document(id=a[0].id, entries=deque())
+                        d.entries.append(InvertedIndex.Entry(
+                            a_ent.position, a_ent.start, b_ent.end))
+                    elif a_ent.position + gap < b_ent.position:
+                        a[0].entries.popleft()
+                    else:
+                        b[0].entries.popleft()
+                if d is not None:
+                    result.append(d)
+            elif a[0].id < b[0].id:
+                a.popleft()
+            else:
+                b.popleft()
+        return result

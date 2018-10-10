@@ -4,7 +4,7 @@ import argparse
 import heapq
 import pysrt
 import os
-from collections import defaultdict, namedtuple, Counter
+from collections import defaultdict, deque, namedtuple, Counter
 from multiprocessing import Pool
 from threading import Lock
 from tqdm import tqdm
@@ -92,7 +92,7 @@ def get_words(doc_dir, docs):
 def inv_index_single_doc(doc_path, lexicon):
     assert isinstance(lexicon, Lexicon)
 
-    doc_inv_index = defaultdict(list)
+    doc_inv_index = defaultdict(deque)
     try:
         subs = load_srt(doc_path)
         doc_position = 0
@@ -122,7 +122,7 @@ def inv_index_batch(doc_batch, out_path):
     assert isinstance(out_path, str)
     assert isinstance(lexicon, Lexicon)
 
-    batch_inv_index = defaultdict(list)     # token -> [(doc, [postings])]
+    batch_inv_index = defaultdict(deque)     # token -> [(doc, [postings])]
     for doc_id, doc_path in doc_batch:
         doc_index = inv_index_single_doc(doc_path, lexicon)
         for token_id, postings in doc_index.items():
@@ -159,7 +159,7 @@ def reverse_index_all_docs(doc_dir, docs, lexicon, out_dir, batch_size=100):
     WORKER_LEXICON = lexicon
 
     with tqdm(total=len(docs)) as pbar, Pool(processes=N_WORKERS) as pool:
-        async_results = []
+        async_results = deque()
         pbar.set_description('Building inverted index')
 
         def progress(n_indexed):
@@ -258,9 +258,10 @@ class MergeIndexParser(object):
         # For priority queuing
         if self.token == o.token:
             return self.doc < o.doc
-        return self.token == o.token
+        return self.token < o.token
 
 
+# TODO: could make this a parallel merge
 def merge_inv_indexes(inv_idx_dir, lexicon, out_path):
     assert isinstance(lexicon, Lexicon)
 
@@ -268,6 +269,7 @@ def merge_inv_indexes(inv_idx_dir, lexicon, out_path):
         os.path.join(inv_idx_dir, x)
         for x in os.listdir(inv_idx_dir) if x.endswith('.bin')
     ]
+
     token_parsers_pq = []
     for path in inv_idx_paths:
         heapq.heappush(token_parsers_pq, MergeIndexParser(path))
@@ -276,7 +278,7 @@ def merge_inv_indexes(inv_idx_dir, lexicon, out_path):
     with open(out_path, 'wb') as f, tqdm(total=len(lexicon)) as pbar:
         pbar.set_description('Merging indexes')
 
-        for i in range(len(lexicon)):
+        for _ in range(len(lexicon)):
             if len(token_parsers_pq) == 0:
                 break
             token_id = token_parsers_pq[0].token
@@ -312,6 +314,10 @@ def merge_inv_indexes(inv_idx_dir, lexicon, out_path):
 
             pbar.update(1)
 
+    assert len(token_parsers_pq) == 0, 'Uh oh... still have lexicons to merge'
+
+    if -1 in jump_offsets:
+        print('Warning: not all lexicon words have been indexed')
     return jump_offsets
 
 
