@@ -286,6 +286,7 @@ def merge_reverse_indexes(ridx_dir, lexicon, out_path):
             token_id = token_parsers_pq[0].token
             pbar.set_description(
                 'Merging indexes ("{}")'.format(lexicon[token_id].token))
+            pbar.update(1)
             jump_offsets[token_id] = f.tell()
 
             doc_parsers_pq = []
