@@ -82,15 +82,15 @@ def get_words(doc_dir, docs):
                 words.update(result)
             pbar.update(1)
 
+        async_results = deque()
         for d in docs:
             doc_path = os.path.join(doc_dir, d)
-            if N_WORKERS > 1:
-                pool.apply_async(get_doc_words, (doc_path,), callback=collect)
-            else:
-                collect(get_doc_words(doc_path))
+            async_results.append(
+                pool.apply_async(get_doc_words, (doc_path,), callback=collect))
 
-        pool.close()
-        pool.join()
+        # Forces exceptions to be rethrown
+        for a in async_results:
+            a.get()
 
     print('Lexicon size: {}'.format(len(words)))
     return words
@@ -175,20 +175,14 @@ def inv_index_all_docs(doc_dir, docs, lexicon, out_dir, batch_size=100):
             ]
             out_path = os.path.join(out_dir, '{}.bin'.format(base_id))
 
-            if N_WORKERS > 1:
-                async_results.append(pool.apply_async(
-                    inv_index_batch,
-                    (doc_batch, out_path),
-                    callback=progress))
-            else:
-                progress(inv_index_batch(doc_batch, out_path))
+            async_results.append(pool.apply_async(
+                inv_index_batch,
+                (doc_batch, out_path),
+                callback=progress))
 
-        for async in async_results:
-            async.wait()
-            assert async.successful()
-
-        pool.close()
-        pool.join()
+        # Forces exceptions to be rethrown
+        for a in async_results:
+            a.get()
 
 
 class MergeIndexParser(object):
@@ -239,11 +233,11 @@ class MergeIndexParser(object):
         while True:
             token_data = self._f.read(DATUM_SIZE)
             if len(token_data) == 0:
-                self._close()
+                self.close()
                 break
             next_token = decode_datum(token_data)
             if next_token > self._max_token:
-                self._close()
+                self.close()
                 break
 
             self._curr_token = next_token
@@ -276,11 +270,11 @@ class MergeIndexParser(object):
     def skip_docs(self):
         assert self._curr_n_docs_left >= 0
         while self._curr_n_docs_left > 0:
-            self._f.seek(DATUM_SIZE, whence=1)
+            self._f.seek(DATUM_SIZE, 1)
             n_postings = decode_datum(self._f.read(DATUM_SIZE))
             postings_len = n_postings * DATUM_SIZE * 3
             assert n_postings > 0, 'Empty postings list'
-            self._f.seek(postings_len, whence=1)
+            self._f.seek(postings_len, 1)
             self._curr_n_docs_left -= 1
 
     def __lt__(self, o):
@@ -360,34 +354,40 @@ def parallel_merge_inv_indexes(idx_dir, lexicon, out_path, tmp_dir):
                 pbar.update(1)
 
             with Pool(processes=N_WORKERS + 1) as pool:
-                worker_args = []
                 tokens_per_worker = math.ceil(len(lexicon) / N_WORKERS)
+                new_idx_paths = []
+                async_results = deque()
 
                 # Partition across the lexicon
                 for file_no, i in enumerate(range(0, len(lexicon),
                                             tokens_per_worker)):
                     new_idx_path = os.path.join(tmp_dir, '{}.bin'.format(file_no))
-                    worker_args.append(
-                        (idx_paths, new_idx_path, i, i + tokens_per_worker))
-
-                results = pool.starmap_async(
-                    merge_inv_indexes, worker_args,
-                    callback=progress)
-
-                # Cat the files together
-                idx_paths = [x for _, x, _, _ in worker_args]
-                with open(out_path, 'wb') as f:
-                    check_call(['cat'] + [idx_paths], stdout=f)
+                    new_idx_paths.append(new_idx_path)
+                    async_results.append(pool.apply_async(
+                        merge_inv_indexes,
+                        (
+                            idx_paths, new_idx_path,
+                            i, min(i + tokens_per_worker, len(lexicon))
+                        ),
+                        callback=progress
+                    ))
 
                 # Merge the jump offsets
                 jump_offsets = [-1] * len(lexicon)
                 global_offset = 0
-                for i, worker_args in enumerate(worker_args):
-                    _, result_path, min_token, max_token = worker_args
-                    worker_result = results[i]
+                for i, (new_idx_path, async) in enumerate(
+                        zip(new_idx_paths, async_results)):
+                    worker_jump_offsets = async.get()
+                    min_token = i * tokens_per_worker
+                    max_token = min(min_token + tokens_per_worker, len(lexicon))
                     for t in range(min_token, max_token):
-                        jump_offsets[t] = global_offset + worker_result[t]
-                    global_offset += os.path.getsize(result_path)
+                        jump_offsets[t] = global_offset + worker_jump_offsets[t]
+                    global_offset += os.path.getsize(new_idx_path)
+
+                # Cat all the files together
+                with open(out_path, 'wb') as f:
+                    check_call(['cat'] + new_idx_paths, stdout=f)
+                pbar.update(1)
 
             if -1 in jump_offsets:
                 print('Warning: not all lexicon words have been indexed')
