@@ -186,7 +186,7 @@ class InvertedIndex(object):
             word = self._lexicon[word.id]
         else:
             word = self._lexicon[word]
-        
+
         if word.offset < 0:
             return deque()
         assert word.offset < self._mmap.size(), \
@@ -249,12 +249,16 @@ class InvertedIndex(object):
                             d = InvertedIndex.Document(id=a[0].id, entries=deque())
                         d.entries.append(InvertedIndex.Entry(
                             a_ent.position, a_ent.start, b_ent.end))
+                        a[0].entries.popleft()
+                        b[0].entries.popleft()
                     elif a_ent.position + gap < b_ent.position:
                         a[0].entries.popleft()
                     else:
                         b[0].entries.popleft()
                 if d is not None:
                     result.append(d)
+                a.popleft()
+                b.popleft()
             elif a[0].id < b[0].id:
                 a.popleft()
             else:

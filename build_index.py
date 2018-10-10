@@ -2,8 +2,10 @@
 
 import argparse
 import heapq
+import math
 import pysrt
 import os
+import shutil
 from collections import defaultdict, deque, namedtuple, Counter
 from multiprocessing import Pool
 from threading import Lock
@@ -18,6 +20,10 @@ DEFAULT_WORKERS = os.cpu_count()
 
 
 N_WORKERS = None
+
+
+# Hack to get around sharing args beween processes workers
+WORKER_LEXICON = None
 
 
 def get_args():
@@ -112,10 +118,6 @@ def inv_index_single_doc(doc_path, lexicon):
     return doc_inv_index
 
 
-# Hack to get around sharing args beween processes workers
-WORKER_LEXICON = None
-
-
 def inv_index_batch(doc_batch, out_path):
     lexicon = WORKER_LEXICON
 
@@ -151,7 +153,7 @@ def inv_index_batch(doc_batch, out_path):
     return len(doc_batch)
 
 
-def reverse_index_all_docs(doc_dir, docs, lexicon, out_dir, batch_size=100):
+def inv_index_all_docs(doc_dir, docs, lexicon, out_dir, batch_size=100):
     assert isinstance(docs, Documents)
     assert isinstance(lexicon, Lexicon)
 
@@ -261,23 +263,15 @@ class MergeIndexParser(object):
         return self.token < o.token
 
 
-# TODO: could make this a parallel merge
-def merge_inv_indexes(inv_idx_dir, lexicon, out_path):
-    assert isinstance(lexicon, Lexicon)
-
-    inv_idx_paths = [
-        os.path.join(inv_idx_dir, x)
-        for x in os.listdir(inv_idx_dir) if x.endswith('.bin')
-    ]
+def merge_inv_indexes(idx_paths, out_path):
+    lexicon = WORKER_LEXICON
 
     token_parsers_pq = []
-    for path in inv_idx_paths:
+    for path in idx_paths:
         heapq.heappush(token_parsers_pq, MergeIndexParser(path))
 
     jump_offsets = [-1] * len(lexicon)
-    with open(out_path, 'wb') as f, tqdm(total=len(lexicon)) as pbar:
-        pbar.set_description('Merging indexes')
-
+    with open(out_path, 'wb') as f:
         for _ in range(len(lexicon)):
             if len(token_parsers_pq) == 0:
                 break
@@ -312,13 +306,67 @@ def merge_inv_indexes(inv_idx_dir, lexicon, out_path):
                     # Return to docs queue
                     heapq.heappush(doc_parsers_pq, p)
 
+    assert len(token_parsers_pq) == 0, 'Uh oh... still have lexicons to merge'
+    return jump_offsets
+
+
+def parallel_merge_inv_indexes(idx_dir, lexicon, out_path, tmp_dir,
+                               batch_size=50):
+    assert isinstance(lexicon, Lexicon)
+    global WORKER_LEXICON
+    WORKER_LEXICON = lexicon
+
+    if N_WORKERS > 0 and not os.path.exists(tmp_dir):
+        os.makedirs(tmp_dir)
+
+    try:
+        idx_paths = [
+            os.path.join(idx_dir, x)
+            for x in os.listdir(idx_dir) if x.endswith('.bin')
+        ]
+
+        def total_steps(n):
+            if n <= batch_size:
+                return 1
+            parts = math.ceil(n / batch_size)
+            return parts + total_steps(parts)
+
+        with tqdm(total=total_steps(len(idx_paths))) as pbar:
+            pbar.set_description('Merging indexes')
+
+            def progress(ignored):
+                pbar.update(1)
+
+            if N_WORKERS > 1:
+                with Pool(processes=N_WORKERS) as pool:
+                    tmp_file_no = 0
+                    while len(idx_paths) > batch_size:
+                        new_idx_paths = []
+                        async_results = []
+                        for i in range(0, len(idx_paths), batch_size):
+                            new_idx_path = os.path.join(tmp_dir, '{}.bin'.format(tmp_file_no))
+                            tmp_file_no += 1
+
+                            async_results.append(
+                                pool.apply_async(
+                                    merge_inv_indexes,
+                                    (idx_paths[i:i + batch_size], new_idx_path),
+                                    callback=progress))
+                            new_idx_paths.append(new_idx_path)
+
+                        for async in async_results:
+                            async.wait()
+                            assert async.successful()
+                        idx_paths = new_idx_paths
+
+            jump_offsets = merge_inv_indexes(idx_paths, out_path)
             pbar.update(1)
 
-    assert len(token_parsers_pq) == 0, 'Uh oh... still have lexicons to merge'
-
-    if -1 in jump_offsets:
-        print('Warning: not all lexicon words have been indexed')
-    return jump_offsets
+            if -1 in jump_offsets:
+                print('Warning: not all lexicon words have been indexed')
+            return jump_offsets
+    finally:
+        shutil.rmtree(tmp_dir, True)
 
 
 def main(doc_dir, out_dir, workers, limit=None):
@@ -354,12 +402,13 @@ def main(doc_dir, out_dir, workers, limit=None):
     chunk_dir = os.path.join(out_dir, 'parts')
     if not os.path.exists(chunk_dir):
         os.makedirs(chunk_dir)
-        reverse_index_all_docs(doc_dir, docs, lexicon, chunk_dir)
+        inv_index_all_docs(doc_dir, docs, lexicon, chunk_dir)
     else:
-        print('Exists: {}'.format(chunk_dir))
+        print('Found existing indexes: {}'.format(chunk_dir))
 
     idx_path = os.path.join(out_dir, 'index.bin')
-    jump_offsets = merge_inv_indexes(chunk_dir, lexicon, idx_path)
+    tmp_dir = os.path.join(out_dir, 'tmp')
+    jump_offsets = parallel_merge_inv_indexes(chunk_dir, lexicon, idx_path, tmp_dir)
 
     # Resave the lexicon with offsets
     lexicon = Lexicon([

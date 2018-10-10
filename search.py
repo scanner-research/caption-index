@@ -25,7 +25,7 @@ def main(index_dir, query):
 
     def run_search(text):
         try:
-            results = index.unigram_search(text)
+            results = index.search(text)
         except Exception as e:
             traceback.print_exc()
             return
