@@ -2,6 +2,7 @@
 
 import argparse
 import os
+import time
 import traceback
 
 from util.index import Lexicon, Documents, InvertedIndex
@@ -11,6 +12,8 @@ def get_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('index_dir', type=str,
                         help='Directory containing index files')
+    parser.add_argument('-s', dest='silent', action='store_true',
+                        help='Silent mode')
     parser.add_argument('query', nargs='*')
     return parser.parse_args()
 
@@ -24,7 +27,7 @@ def format_seconds(s):
         hours, minutes, seconds, millis)
 
 
-def main(index_dir, query):
+def main(index_dir, query, silent):
     doc_path = os.path.join(index_dir, 'docs.list')
     lex_path = os.path.join(index_dir, 'words.lex')
     idx_path = os.path.join(index_dir, 'index.bin')
@@ -33,6 +36,7 @@ def main(index_dir, query):
     lexicon = Lexicon.load(lex_path)
 
     def run_search(text):
+        start_time = time.time()
         try:
             result = index.search(text)
         except Exception as e:
@@ -42,17 +46,20 @@ def main(index_dir, query):
         occurence_count = 0
         i = 0
         for i, d in enumerate(result.documents):
-            print(documents[d.id])
+            if not silent:
+                print(documents[d.id])
             occurence_count += d.count
             for j, e in enumerate(d.locations):
-                print(' {}-- [{} - {}] index={}'.format(
-                    '\\' if j == d.count - 1 else '|',
-                    format_seconds(e.start), format_seconds(e.end),
-                    e.index))
+                if not silent:
+                    print(' {}-- [{} - {}] index={}'.format(
+                        '\\' if j == d.count - 1 else '|',
+                        format_seconds(e.start), format_seconds(e.end),
+                        e.index))
 
         if result.count is not None:
             assert result.count == i + 1
-        print('Found {} documents, {} occurences'.format(i, occurence_count))
+        print('Found {} documents, {} occurences in {:d}ms'.format(
+              i, occurence_count, int((time.time() - start_time) * 1000)))
 
     with InvertedIndex(idx_path, lexicon, documents) as index:
         if len(query) > 0:
