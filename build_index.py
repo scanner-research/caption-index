@@ -134,7 +134,11 @@ def index_single_doc(doc_path, lexicon):
                     tokens.append(MAX_DATUM_VALUE if token is None else token.id)
 
             doc_lines.append((entry_start_position, start, end, tokens))
+
+        if len(doc_lines) == 0:
+            print('Empty file: {}'.format(doc_path))
     except Exception as e:
+        print('Failed to index: {}'.format(doc_path))
         print(e)
     return doc_lines, doc_inv_index
 

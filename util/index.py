@@ -434,8 +434,8 @@ class DocumentData(object):
         else:
             doc = self._documents[doc]
 
-        assert doc.length > 0, 'Invalid document length: {}'.format(doc.length)
-        assert doc.token_data_offset > 0, 'Invalid data offset'
+        assert doc.length >= 0, 'Invalid document length: {}'.format(doc.length)
+        assert doc.token_data_offset >= 0, 'Invalid data offset'
 
         if end_pos is None or end_pos > doc.length:
             end_pos = doc.length
@@ -458,9 +458,9 @@ class DocumentData(object):
         else:
             doc = self._documents[doc]
 
-        assert doc.length > 0, 'Invalid document length: {}'.format(doc.length)
-        assert doc.time_index_offset > 0, 'Invalid time index offset'
-        assert doc.token_data_offset > 0, 'Invalid data offset'
+        assert doc.length >= 0, 'Invalid document length: {}'.format(doc.length)
+        assert doc.time_index_offset >= 0, 'Invalid time index offset'
+        assert doc.token_data_offset >= 0, 'Invalid data offset'
 
         base_idx_offset = doc.time_index_offset
         base_token_offset = doc.token_data_offset
