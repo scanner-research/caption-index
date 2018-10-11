@@ -43,6 +43,8 @@ def get_args():
     p.add_argument('-j', dest='workers', type=int, default=DEFAULT_WORKERS,
                    help='Number of CPU cores to use. Default: {}'.format(
                         DEFAULT_WORKERS))
+    p.add_argument('--keep-cache', dest='keep_cache', action='store_true',
+                   help='Cache intermediate index chunks')
     p.add_argument('--limit', dest='limit', type=int,
                    help='Number of documents to parse. Default: None')
     return p.parse_args()
@@ -491,7 +493,7 @@ def parallel_merge_inv_indexes(idx_dir, lexicon, out_path, merge_dir):
         shutil.rmtree(merge_dir, True)
 
 
-def main(doc_dir, out_dir, workers, limit=None):
+def main(doc_dir, out_dir, workers, keep_cache=False, limit=None):
     global N_WORKERS
     N_WORKERS = workers
 
@@ -555,6 +557,11 @@ def main(doc_dir, out_dir, workers, limit=None):
     ])
     lexicon.store(lex_path)
     assert os.path.exists(lex_path), 'Missing: {}'.format(idx_path)
+
+    # Remove the partial inverted index chunks
+    if not keep_cache:
+        print('Removing intermediate data: {}'.format(chunk_dir))
+        shutil.rmtree(chunk_dir, True)
 
 
 if __name__ == '__main__':
