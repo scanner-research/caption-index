@@ -1,5 +1,5 @@
 """
-Inverted index for srt files.
+Indexes for srt files.
 """
 
 import nltk
@@ -27,6 +27,7 @@ class Lexicon(object):
     def __init__(self, words):
         """List of words, where w.id is the index in the list"""
         assert isinstance(words, list)
+        assert all(i == w.id for i, w in enumerate(words))
         self._words = words
         self._inverse = {w.token: w for i, w in enumerate(self._words)}
 
@@ -83,7 +84,8 @@ class Documents(object):
         ])
 
     def __init__(self, docs):
-        """List of Document, where index is the id"""
+        """List of Documents, where index is the id"""
+        assert all(i == d.id for i, d in enumerate(docs))
         self._docs = docs
 
     def __iter__(self):
@@ -124,7 +126,8 @@ class Documents(object):
         with open(path, 'r') as f:
             documents = []
             for i, line in enumerate(f):
-                name, length, time_index_offset, token_data_offset = line.strip().split('\t')
+                name, length, time_index_offset, token_data_offset = \
+                    line.strip().split('\t')
                 length = int(length)
                 time_index_offset = int(time_index_offset)
                 token_data_offset = int(token_data_offset)
@@ -205,7 +208,7 @@ class BinaryFormat(object):
     def decode_time_interval(self, s):
         assert len(s) == self.time_interval_bytes
         start = int.from_bytes(s[:self._start_time_bytes], self._endian)
-        diff = int.from_bytes(s[self.end_time_bytes:], self._endian)
+        diff = int.from_bytes(s[self._end_time_bytes:], self._endian)
         return start, start + diff
 
     def encode_datum(self, i):
@@ -238,7 +241,63 @@ def empty_generator():
     yield
 
 
-class InvertedIndex(object):
+class _MemoryMappedFile(object):
+    """
+    Base class for an object backed by a mmapped file
+    """
+
+    def __init__(self, path, binary_format):
+        assert isinstance(path, str)
+
+        if binary_format is not None:
+            assert isinstance(binary_format, BinaryFormat)
+            self._bin_fmt = binary_format
+        else:
+            self._bin_fmt = BinaryFormat.default()
+
+        self._f = open(path, 'rb')
+        self._mmap = mmap.mmap(self._f.fileno(), 0, access=mmap.ACCESS_READ)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exception_type, exception_value, traceback):
+        self.close()
+
+    def close(self):
+        if self._f is not None:
+            self._mmap.close()
+            self._mmap = None
+            self._f.close()
+            self._f = None
+
+    def _datum_at(self, i):
+        return self._bin_fmt.decode_datum(
+            self._mmap[i:i + self._bin_fmt.datum_bytes])
+
+    def _time_int_at(self, i):
+        return self._bin_fmt.decode_time_interval(
+            self._mmap[i:i + self._bin_fmt.time_interval_bytes])
+
+
+class InvertedIndex(_MemoryMappedFile):
+    """
+    Interface to a binary encoded inverted index file
+
+    The format of the file is (field, type):
+
+        token_id: datum
+        document_count: datum
+        |-- document_id: datum
+        |-- location_count: datum
+        |   |-- location_idx: datum
+        |   |-- start, end: time_interval
+        |   |-- ... (more locations)
+        |-- ... (more documents)
+
+    For O(1) indexing, the Lexicon contains a map of tokens to their binary
+    offsets in this file.
+    """
 
     LocationResult = namedtuple(
         'LocationResult', [
@@ -262,32 +321,12 @@ class InvertedIndex(object):
         ])
 
     def __init__(self, path, lexicon, documents, binary_format=None):
+        super(InvertedIndex, self).__init__(path, binary_format)
+
         assert isinstance(lexicon, Lexicon)
         assert isinstance(documents, Documents)
-        assert isinstance(path, str)
-        if binary_format is not None:
-            assert isinstance(binary_format, BinaryFormat)
-            self._bin_fmt = binary_format
-        else:
-            self._bin_fmt = BinaryFormat.default()
-
         self._lexicon = lexicon
         self._documents = documents
-        self._f = open(path, 'rb')
-        self._mmap = mmap.mmap(self._f.fileno(), 0, access=mmap.ACCESS_READ)
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, exception_type, exception_value, traceback):
-        self.close()
-
-    def close(self):
-        if self._f is not None:
-            self._mmap.close()
-            self._mmap = None
-            self._f.close()
-            self._f = None
 
     def search(self, text):
         if isinstance(text, str):
@@ -313,14 +352,6 @@ class InvertedIndex(object):
                 documents=InvertedIndex._merge_results(
                     partial_result, next_result, i + 1))
         return partial_result
-
-    def _datum_at(self, i):
-        return self._bin_fmt.decode_datum(
-            self._mmap[i:i + self._bin_fmt.datum_bytes])
-
-    def _time_int_at(self, i):
-        return self._bin_fmt.decode_time_interval(
-            self._mmap[i:i + self._bin_fmt.time_interval_bytes])
 
     def _get_locations(self, offset, count):
         for _ in range(count):
@@ -422,7 +453,28 @@ class InvertedIndex(object):
                 b_head = next(b.documents)
 
 
-class DocumentData(object):
+class DocumentData(_MemoryMappedFile):
+    """
+    Interface to a binary encoded document data file
+
+    For each document, there are two sections, always sequential.
+
+    [Time Index]
+    Array of the following, repeated for each entry in transcript.
+
+        start, end: time_interval
+        position: datum
+
+    [Token Data]
+    Array of token_ids.
+
+        token1: datum
+        token2: datum
+        ...
+
+    For O(1) indexing, the Documents object contains a map from documents to
+    their Time Index and Token Data offsets, and the number of tokens.
+    """
 
     Interval = namedtuple(
         'Interval', [
@@ -434,40 +486,12 @@ class DocumentData(object):
         ])
 
     def __init__(self, path, lexicon, documents, binary_format=None):
+        super(DocumentData, self).__init__(path, binary_format)
+
         assert isinstance(lexicon, Lexicon)
         assert isinstance(documents, Documents)
-        assert isinstance(path, str)
-        if binary_format is not None:
-            assert isinstance(binary_format, BinaryFormat)
-            self._bin_fmt = binary_format
-        else:
-            self._bin_fmt = BinaryFormat.default()
-
         self._documents = documents
         self._lexicon = lexicon
-        self._f = open(path, 'rb')
-        self._mmap = mmap.mmap(self._f.fileno(), 0, access=mmap.ACCESS_READ)
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, exception_type, exception_value, traceback):
-        self.close()
-
-    def close(self):
-        if self._f is not None:
-            self._mmap.close()
-            self._mmap = None
-            self._f.close()
-            self._f = None
-
-    def _datum_at(self, i):
-        return self._bin_fmt.decode_datum(
-            self._mmap[i:i + self._bin_fmt.datum_bytes])
-
-    def _time_int_at(self, i):
-        return self._bin_fmt.decode_time_interval(
-            self._mmap[i:i + self._bin_fmt.time_interval_bytes])
 
     def _tokens(self, offset, n, decode):
         for i in range(n):
@@ -502,7 +526,8 @@ class DocumentData(object):
         elif start_pos >= end_pos:
             return empty_generator()
 
-        start_offset = doc.token_data_offset + start_pos * self._bin_fmt.datum_bytes
+        start_offset = (doc.token_data_offset +
+                        start_pos * self._bin_fmt.datum_bytes)
         return self._tokens(start_offset, end_pos - start_pos, decode)
 
     def token_intervals(self, doc, start_time, end_time, decode=False):
@@ -540,6 +565,7 @@ class DocumentData(object):
                 yield DocumentData.Interval(
                     start=start, end=end, position=position, length=length,
                     tokens=self._tokens(
-                        base_token_offset + position * self._bin_fmt.datum_bytes,
+                        (base_token_offset
+                            + position * self._bin_fmt.datum_bytes),
                         length, decode
                     ))
