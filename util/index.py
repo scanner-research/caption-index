@@ -162,10 +162,37 @@ def millis_to_seconds(t):
     return t / 1000
 
 
+def empty_generator():
+    return
+    yield
+
+def sequence_to_generator(seq):
+    for s in seq:
+        yield s
+
+
 class InvertedIndex(object):
 
-    Entry = namedtuple('Entry', ['position', 'start', 'end'])
-    Document = namedtuple('Document', ['id', 'entries'])
+    Location = namedtuple(
+        'Location', [
+            'index',    # Position in document
+            'start',    # Start time in seconds
+            'end'       # End time in seconds
+        ])
+
+    Document = namedtuple(
+        'Document', [
+            'id',           # Document ID
+            'count',        # Number of locations
+            'locations'     # Generator of locations
+        ])
+
+    Result = namedtuple(
+        'Result', [
+            'count',        # Count of documents (None if this count is not
+                            # available)
+            'documents'     # Generator of documents
+        ])
 
     def __init__(self, path, lexicon, documents):
         assert isinstance(lexicon, Lexicon)
@@ -208,11 +235,46 @@ class InvertedIndex(object):
         partial_result = self.unigram_search(first_word)
         for i, next_word in enumerate(other_words):
             next_result = self.unigram_search(next_word)
-            partial_result = InvertedIndex._merge_results(
-                partial_result, next_result, i + 1)
-            if len(partial_result) == 0:
-                break
+            partial_result = InvertedIndex.Result(
+                count=None,
+                documents=InvertedIndex._merge_results(
+                    partial_result, next_result, i + 1))
         return partial_result
+
+    def _datum_at(self, i):
+        return mmap_decode_datum(self._mmap, i)
+
+    def _time_int_at(self, i):
+        return mmap_decode_time_int(self._mmap, i)
+
+    def _get_locations(self, offset, count):
+        for _ in range(count):
+            index = self._datum_at(offset)
+            offset += DATUM_SIZE
+            start, end = self._time_int_at(offset)
+            offset += TIME_INT_SIZE
+            yield InvertedIndex.Location(
+                index, millis_to_seconds(start),
+                millis_to_seconds(end))
+
+    def _get_documents(self, offset, count):
+        prev_doc_id = None
+        for _ in range(count):
+            doc_id = self._datum_at(offset)
+            assert prev_doc_id is None or doc_id > prev_doc_id, \
+                'Uh oh... document ids should be ascending, but {} <= {}'.format(
+                    doc_id, prev_doc_id)
+            offset += DATUM_SIZE
+
+            posting_count = self._datum_at(offset)
+            assert posting_count > 0, 'Expected at least one posting'
+            offset += DATUM_SIZE
+
+            yield InvertedIndex.Document(
+                id=doc_id, count=posting_count,
+                locations=self._get_locations(offset, posting_count))
+            offset += posting_count * (DATUM_SIZE + TIME_INT_SIZE)
+            prev_doc_id = doc_id
 
     def unigram_search(self, word):
         if isinstance(word, Lexicon.Word):
@@ -221,82 +283,62 @@ class InvertedIndex(object):
             word = self._lexicon[word]
 
         if word.offset < 0:
-            return deque()
+            return InvertedIndex.Result(count=0, documents=empty_generator())
         assert word.offset < self._mmap.size(), \
-            'Offset exceeds file length: {} > {}'.format(word.offset, self._mmap.size())
+            'Offset exceeds file length: {} > {}'.format(
+            word.offset, self._mmap.size())
 
         curr_offset = word.offset
 
-        def mm_datum(i):
-            return mmap_decode_datum(self._mmap, i)
-
-        def mm_time_int(i):
-            return mmap_decode_time_int(self._mmap, i)
-
-        word_id = mm_datum(curr_offset)
+        word_id = self._datum_at(curr_offset)
         assert word_id == word.id, \
             'Expected word id {}, got {}'.format(word.id, word_id)
         curr_offset += DATUM_SIZE
 
-        doc_count = mm_datum(curr_offset)
+        doc_count = self._datum_at(curr_offset)
         assert doc_count > 0, 'Expected at least one document'
-        assert doc_count < len(self._documents), 'Uh oh... too many documents: {}'.format(doc_count)
+        assert doc_count < len(self._documents), \
+            'Uh oh... too many documents: {}'.format(doc_count)
         curr_offset += DATUM_SIZE
 
-        result = deque()
-
-        prev_doc_id = None
-        for _ in range(doc_count):
-            doc_id = mm_datum(curr_offset)
-            assert prev_doc_id is None or doc_id > prev_doc_id, \
-                'Uh oh... document ids should be ascending, but {} <= {}'.format(doc_id, prev_doc_id)
-            curr_offset += DATUM_SIZE
-
-            posting_count = mm_datum(curr_offset)
-            assert posting_count > 0, 'Expected at least one posting'
-            curr_offset += DATUM_SIZE
-
-            d = InvertedIndex.Document(id=doc_id, entries=deque())
-            for _ in range(posting_count):
-                position = mm_datum(curr_offset)
-                curr_offset += DATUM_SIZE
-                start, end = mm_time_int(curr_offset)
-                curr_offset += TIME_INT_SIZE
-                d.entries.append(InvertedIndex.Entry(
-                    position, millis_to_seconds(start),
-                    millis_to_seconds(end)))
-            result.append(d)
-            prev_doc_id = doc_id
-        return result
+        return InvertedIndex.Result(
+            count=doc_count,
+            documents=self._get_documents(curr_offset, doc_count))
 
     @staticmethod
     def _merge_results(a, b, gap):
-        """Overlap sorted results for ngrams"""
-        result = deque()
-        while len(a) > 0 and len(b) > 0:
-            if a[0].id == b[0].id:
+        """Generator for merged results"""
+        a_head = next(a.documents)
+        b_head = next(b.documents)
+        while True:
+            if a_head.id == b_head.id:
                 # Merge within a document
-                d = None
-                while len(a[0].entries) > 0 and len(b[0].entries) > 0:
-                    a_ent = a[0].entries[0]
-                    b_ent = b[0].entries[0]
-                    if a_ent.position + gap == b_ent.position:
-                        if d is None:
-                            d = InvertedIndex.Document(id=a[0].id, entries=deque())
-                        d.entries.append(InvertedIndex.Entry(
-                            a_ent.position, a_ent.start, b_ent.end))
-                        a[0].entries.popleft()
-                        b[0].entries.popleft()
-                    elif a_ent.position + gap < b_ent.position:
-                        a[0].entries.popleft()
-                    else:
-                        b[0].entries.popleft()
-                if d is not None:
-                    result.append(d)
-                a.popleft()
-                b.popleft()
-            elif a[0].id < b[0].id:
-                a.popleft()
+                locations = None
+                try:
+                    a_ent = next(a_head.locations)
+                    b_ent = next(b_head.locations)
+                    while True:
+                        if a_ent.index + gap == b_ent.index:
+                            if locations is None:
+                                locations = deque()
+                            locations.append(InvertedIndex.Location(
+                                a_ent.index, a_ent.start, b_ent.end))
+                            a_ent = next(a_head.locations)
+                            b_ent = next(b_head.locations)
+                        elif a_ent.index + gap < b_ent.index:
+                            a_ent = next(a_head.locations)
+                        else:
+                            b_ent = next(b_head.locations)
+                except StopIteration:
+                    pass
+                finally:
+                    if locations is not None:
+                        yield InvertedIndex.Document(
+                            id=a_head.id, count=len(locations),
+                            locations=sequence_to_generator(locations))
+                a_head = next(a.documents)
+                b_head = next(b.documents)
+            elif a_head.id < b_head.id:
+                a_head = next(a.documents)
             else:
-                b.popleft()
-        return result
+                b_head = next(b.documents)

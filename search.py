@@ -20,7 +20,8 @@ def format_seconds(s):
     minutes = int(s / 60) - hours * 60
     seconds = int(s) - hours * 3600 - minutes * 60
     millis = int((s - int(s)) * 1000)
-    return '{:02d}h {:02d}m {:02d}.{:03d}s'.format(hours, minutes, seconds, millis)
+    return '{:02d}h {:02d}m {:02d}.{:03d}s'.format(
+        hours, minutes, seconds, millis)
 
 
 def main(index_dir, query):
@@ -33,25 +34,32 @@ def main(index_dir, query):
 
     def run_search(text):
         try:
-            results = index.search(text)
+            result = index.search(text)
         except Exception as e:
             traceback.print_exc()
             return
 
-        for d in results:
+        occurence_count = 0
+        i = 0
+        for i, d in enumerate(result.documents):
             print(documents[d.id])
-            for i, e in enumerate(d.entries):
-                print(' {}-- [{} - {}] position={}'.format(
-                    '\\' if i == len(d.entries) - 1 else '|',
-                    format_seconds(e.start), format_seconds(e.end), e.position))
-        print('Found {} documents, {} occurences'.format(
-            len(results), sum(len(d.entries) for d in results)))
+            occurence_count += d.count
+            for j, e in enumerate(d.locations):
+                print(' {}-- [{} - {}] index={}'.format(
+                    '\\' if j == d.count - 1 else '|',
+                    format_seconds(e.start), format_seconds(e.end),
+                    e.index))
+
+        if result.count is not None:
+            assert result.count == i + 1
+        print('Found {} documents, {} occurences'.format(i, occurence_count))
 
     with InvertedIndex(idx_path, lexicon, documents) as index:
         if len(query) > 0:
             print('Query: ', query)
             run_search(' '.join(query))
         else:
+            print('Enter a token or phrase:')
             while True:
                 try:
                     query = input('> ')
