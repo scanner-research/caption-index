@@ -12,9 +12,10 @@ from subprocess import check_call
 from threading import Lock
 from tqdm import tqdm
 
-from util.index import tokenize, Lexicon, Documents, \
-    encode_datum, decode_datum, encode_time_int, \
-    DATUM_SIZE, TIME_INT_SIZE, MAX_TIME_INT_VALUE, MAX_DATUM_VALUE
+from util.index import tokenize, Lexicon, Documents, BinaryFormat
+
+
+BINARY_FORMAT = BinaryFormat.default()
 
 
 DEFAULT_OUT_DIR = 'out'
@@ -34,11 +35,14 @@ WORKER_LEXICON = None
 
 def get_args():
     p = argparse.ArgumentParser()
-    p.add_argument('doc_dir', type=str, help='Directory containing transcripts')
+    p.add_argument('doc_dir', type=str,
+                   help='Directory containing transcripts')
     p.add_argument('-o', dest='out_dir', type=str, default=DEFAULT_OUT_DIR,
-                   help='Output directory. Default: {}'.format(DEFAULT_OUT_DIR))
+                   help='Output directory. Default: {}'.format(
+                        DEFAULT_OUT_DIR))
     p.add_argument('-j', dest='workers', type=int, default=DEFAULT_WORKERS,
-                   help='Number of CPU cores to use. Default: {}'.format(DEFAULT_WORKERS))
+                   help='Number of CPU cores to use. Default: {}'.format(
+                        DEFAULT_WORKERS))
     p.add_argument('--limit', dest='limit', type=int,
                    help='Number of documents to parse. Default: None')
     return p.parse_args()
@@ -114,9 +118,10 @@ def index_single_doc(doc_path, lexicon):
             if start > end:
                 print('Warning: start time > end time ({} > {})'.format(start, end))
                 end = start
-            if end - start > MAX_TIME_INT_VALUE:
-                print('Warning: end - start > {}ms'.format(MAX_TIME_INT_VALUE))
-                end = start + MAX_TIME_INT_VALUE
+            if end - start > BINARY_FORMAT.max_time_interval:
+                print('Warning: end - start > {}ms'.format(
+                      BINARY_FORMAT.max_time_interval))
+                end = start + BINARY_FORMAT.max_time_interval
 
             tokens = deque()
             entry_start_position = doc_position
@@ -131,7 +136,9 @@ def index_single_doc(doc_path, lexicon):
                     doc_inv_index[token.id].append((doc_position, start, end))
                 finally:
                     doc_position += 1
-                    tokens.append(MAX_DATUM_VALUE if token is None else token.id)
+                    tokens.append(
+                        BINARY_FORMAT.max_datum_value
+                        if token is None else token.id)
 
             doc_lines.append((entry_start_position, start, end, tokens))
 
@@ -150,18 +157,20 @@ def write_inv_index(inv_index, out_path):
             docs = inv_index[token_id]
             assert len(docs) > 0
 
-            f.write(encode_datum(token_id))    # Token id
-            f.write(encode_datum(len(docs)))   # Num of docs in list
+            # Token id and number of docs contain it
+            f.write(BINARY_FORMAT.encode_datum(token_id))
+            f.write(BINARY_FORMAT.encode_datum(len(docs)))
 
             # Order by increasing doc_id
             for doc_id, postings in sorted(docs, key=lambda x: x[0]):
-                f.write(encode_datum(doc_id))          # Doc id
-                f.write(encode_datum(len(postings)))   # Num postings in doc
+                f.write(BINARY_FORMAT.encode_datum(doc_id))
+                f.write(BINARY_FORMAT.encode_datum(len(postings)))
                 assert len(postings) > 0
 
+                # Ordered by position (by contruction)
                 for (position, start, end) in postings:
-                    f.write(encode_datum(position))
-                    f.write(encode_time_int(start, end))
+                    f.write(BINARY_FORMAT.encode_datum(position))
+                    f.write(BINARY_FORMAT.encode_time_interval(start, end))
 
 
 def encode_doc_batch(batch_doc_lines, out_path):
@@ -171,14 +180,14 @@ def encode_doc_batch(batch_doc_lines, out_path):
         for doc_id, doc_lines in batch_doc_lines:
             doc_time_idx_start = f.tell()
             for position, start, end, _ in doc_lines:
-                f.write(encode_time_int(start, end))
-                f.write(encode_datum(position))
+                f.write(BINARY_FORMAT.encode_time_interval(start, end))
+                f.write(BINARY_FORMAT.encode_datum(position))
 
             doc_len = 0
             doc_token_data_start = f.tell()
             for _, _, _, tokens in doc_lines:
                 for t in tokens:
-                    f.write(encode_datum(t))
+                    f.write(BINARY_FORMAT.encode_datum(t))
                 doc_len += len(tokens)
             batch_doc_offsets.append(
                 (doc_time_idx_start, doc_token_data_start, doc_len))
@@ -309,17 +318,18 @@ class MergeIndexParser(object):
         assert not self._done, 'EOF already reached'
         assert self._curr_n_docs_left == 0, 'Not done processing docs'
         while True:
-            token_data = self._f.read(DATUM_SIZE)
+            token_data = self._f.read(BINARY_FORMAT.datum_bytes)
             if len(token_data) == 0:
                 self.close()
                 break
-            next_token = decode_datum(token_data)
+            next_token = BINARY_FORMAT.decode_datum(token_data)
             if next_token > self._max_token:
                 self.close()
                 break
 
             self._curr_token = next_token
-            self._curr_n_docs = decode_datum(self._f.read(DATUM_SIZE))
+            self._curr_n_docs = BINARY_FORMAT.decode_datum(
+                self._f.read(BINARY_FORMAT.datum_bytes))
             self._curr_n_docs_left = self._curr_n_docs
             assert self._curr_n_docs > 0, 'Token cannot have no docs'
             if self._curr_token < self._min_token:
@@ -335,10 +345,13 @@ class MergeIndexParser(object):
             self._curr_doc = None
         else:
             self._curr_n_docs_left -= 1
-            doc_id = decode_datum(self._f.read(DATUM_SIZE))
-            n_postings = decode_datum(self._f.read(DATUM_SIZE))
+            doc_id = BINARY_FORMAT.decode_datum(
+                self._f.read(BINARY_FORMAT.datum_bytes))
+            n_postings = BINARY_FORMAT.decode_datum(
+                self._f.read(BINARY_FORMAT.datum_bytes))
             assert n_postings > 0, 'Empty postings list'
-            postings_len = n_postings * (DATUM_SIZE + TIME_INT_SIZE)
+            postings_len = n_postings * (
+                BINARY_FORMAT.datum_bytes + BINARY_FORMAT.time_interval_bytes)
             postings_data = self._f.read(postings_len)
             assert len(postings_data) == postings_len, 'Invalid read'
             self._curr_doc = MergeIndexParser.ParsedDocument(
@@ -348,9 +361,11 @@ class MergeIndexParser(object):
     def skip_docs(self):
         assert self._curr_n_docs_left >= 0
         while self._curr_n_docs_left > 0:
-            self._f.seek(DATUM_SIZE, 1)
-            n_postings = decode_datum(self._f.read(DATUM_SIZE))
-            postings_len = n_postings * (DATUM_SIZE + TIME_INT_SIZE)
+            self._f.seek(BINARY_FORMAT.datum_bytes, 1)
+            n_postings = BINARY_FORMAT.decode_datum(
+                self._f.read(BINARY_FORMAT.datum_bytes))
+            postings_len = n_postings * (
+                BINARY_FORMAT.datum_bytes + BINARY_FORMAT.time_interval_bytes)
             assert n_postings > 0, 'Empty postings list'
             self._f.seek(postings_len, 1)
             self._curr_n_docs_left -= 1
@@ -390,14 +405,14 @@ def merge_inv_indexes(idx_paths, out_path, min_token, max_token):
                 heapq.heappush(doc_parsers_pq, p)
             assert len(doc_parsers_pq) >= 1
 
-            f.write(encode_datum(token_id))   # Token id
-            f.write(encode_datum(doc_count))  # Num docs
+            f.write(BINARY_FORMAT.encode_datum(token_id))   # Token id
+            f.write(BINARY_FORMAT.encode_datum(doc_count))  # Num docs
 
             while len(doc_parsers_pq) > 0:
                 p = heapq.heappop(doc_parsers_pq)
-                f.write(encode_datum(p.doc.id))      # Doc id
-                f.write(encode_datum(p.doc.n))       # Num postings
-                f.write(p.doc.data)                  # Raw postings data
+                f.write(BINARY_FORMAT.encode_datum(p.doc.id))   # Doc id
+                f.write(BINARY_FORMAT.encode_datum(p.doc.n))    # Num postings
+                f.write(p.doc.data)                             # Raw postings
 
                 if p.next_doc() is None:
                     if p.next_token() is not None:

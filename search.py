@@ -19,7 +19,8 @@ def get_args():
                         help='Silent mode')
     parser.add_argument('-c', dest='context_size', type=int,
                         default=DEFAULT_CONTEXT,
-                        help='Context window width (default: {})'.format(DEFAULT_CONTEXT))
+                        help='Context window width (default: {})'.format(
+                             DEFAULT_CONTEXT))
     parser.add_argument('query', nargs='*')
     return parser.parse_args()
 

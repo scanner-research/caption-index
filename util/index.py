@@ -12,6 +12,9 @@ def tokenize(s):
 
 
 class Lexicon(object):
+    """A map from word to id, and vice versa"""
+
+    UNKNOWN_TOKEN = '<UNKNOWN>'
 
     Word = namedtuple(
         'Word', [
@@ -68,6 +71,7 @@ class Lexicon(object):
 
 
 class Documents(object):
+    """A mapping from document id to name, and vice versa"""
 
     Document = namedtuple(
         'Document', [
@@ -131,58 +135,98 @@ class Documents(object):
             return Documents(documents)
 
 
-ENDIAN = 'little'
+class BinaryFormat(object):
+    """
+    Binary data formatter for writing and reading the indexes
 
-# Time interval encoding
-START_TIME_SIZE = 4
-END_TIME_SIZE = 2
-TIME_INT_SIZE = START_TIME_SIZE + END_TIME_SIZE
-MAX_TIME_INT_VALUE = 2 ** (8 * (START_TIME_SIZE - END_TIME_SIZE)) - 1
+    Supports two data types:
+        - time interval
+        - datum
+    """
 
+    Config = namedtuple(
+        'Config', [
+            'endian',
+            'start_time_bytes',
+            'end_time_bytes',
+            'datum_bytes',
+        ])
 
-def encode_time_int(start, end):
-    assert isinstance(start, int)
-    assert isinstance(end, int)
-    diff = end - start
-    if diff < 0:
-        raise ValueError('start cannot exceed end: {} > {}'.format(start, end))
-    if diff > MAX_TIME_INT_VALUE:
-        raise ValueError('end - start > {}'.format(MAX_TIME_INT_VALUE))
-    return (start).to_bytes(START_TIME_SIZE, ENDIAN) + (diff).to_bytes(END_TIME_SIZE, ENDIAN)
+    def __init__(self, config):
+        assert config.endian in ['big', 'little']
+        self._endian = config.endian
 
+        assert config.start_time_bytes > 0
+        assert config.end_time_bytes > 0
+        self._start_time_bytes = config.start_time_bytes
+        self._end_time_bytes = config.end_time_bytes
 
-def decode_time_int(s):
-    assert len(s) == TIME_INT_SIZE
-    start = int.from_bytes(s[:START_TIME_SIZE], ENDIAN)
-    diff = int.from_bytes(s[START_TIME_SIZE:], ENDIAN)
-    return start, start + diff
+        assert config.datum_bytes > 0
+        self._datum_bytes = config.datum_bytes
 
+        # Derived values
+        self._time_interval_bytes = (
+            config.start_time_bytes + config.end_time_bytes)
+        self._max_time_interval = (
+            2 ** (8 * (config.start_time_bytes - config.end_time_bytes)) - 1)
+        self._max_datum_value = 2 ** (config.datum_bytes * 8) - 1
 
-def mmap_decode_time_int(mm, i):
-    return decode_time_int(mm[i:i + TIME_INT_SIZE])
+    @property
+    def time_interval_bytes(self):
+        return self._time_interval_bytes
 
+    @property
+    def datum_bytes(self):
+        return self._datum_bytes
 
-# Everything except time intervals are datums
-DATUM_SIZE = 3
-MAX_DATUM_VALUE = 2 ** (DATUM_SIZE * 8) - 1
+    @property
+    def max_time_interval(self):
+        """Largest number of milliseconds between start and end times"""
+        return self._max_time_interval
 
+    @property
+    def max_datum_value(self):
+        """Largest value that can be serialized"""
+        return self._max_datum_value
 
-def encode_datum(i):
-    assert isinstance(i, int)
-    if i < 0:
-        raise ValueError('Out of range: {} < 0'.format(i))
-    if i > MAX_DATUM_VALUE:
-        raise ValueError('Out of range: {} > {}'.format(i, MAX_DATUM_VALUE))
-    return (i).to_bytes(DATUM_SIZE, ENDIAN)
+    def encode_time_interval(self, start, end):
+        assert isinstance(start, int)
+        assert isinstance(end, int)
+        diff = end - start
+        if diff < 0:
+            raise ValueError(
+                'start cannot exceed end: {} > {}'.format(start, end))
+        if diff > self.max_time_interval:
+            raise ValueError('end - start > {}'.format(self.max_time_interval))
+        return (
+            (start).to_bytes(self._start_time_bytes, self._endian) +
+            (diff).to_bytes(self._end_time_bytes, self._endian))
 
+    def decode_time_interval(self, s):
+        assert len(s) == self.time_interval_bytes
+        start = int.from_bytes(s[:self._start_time_bytes], self._endian)
+        diff = int.from_bytes(s[self.end_time_bytes:], self._endian)
+        return start, start + diff
 
-def decode_datum(s):
-    assert len(s) == DATUM_SIZE, '{} is too short'.format(len(s))
-    return int.from_bytes(s, ENDIAN)
+    def encode_datum(self, i):
+        assert isinstance(i, int)
+        if i < 0:
+            raise ValueError('Out of range: {} < 0'.format(i))
+        if i > self._max_datum_value:
+            raise ValueError('Out of range: {} > {}'.format(
+                             i, self._max_datum_value))
+        return (i).to_bytes(self._datum_bytes, self._endian)
 
+    def decode_datum(self, s):
+        assert len(s) == self._datum_bytes, '{} is too short'.format(len(s))
+        return int.from_bytes(s, self._endian)
 
-def mmap_decode_datum(mm, i):
-    return decode_datum(mm[i:i + DATUM_SIZE])
+    @staticmethod
+    def default():
+        return BinaryFormat(
+            BinaryFormat.Config(
+                endian='little', start_time_bytes=4, end_time_bytes=2,
+                datum_bytes=3))
 
 
 def millis_to_seconds(t):
@@ -192,11 +236,6 @@ def millis_to_seconds(t):
 def empty_generator():
     return
     yield
-
-
-def sequence_to_generator(seq):
-    for s in seq:
-        yield s
 
 
 class InvertedIndex(object):
@@ -222,10 +261,16 @@ class InvertedIndex(object):
             'documents'     # Generator of documents
         ])
 
-    def __init__(self, path, lexicon, documents):
+    def __init__(self, path, lexicon, documents, binary_format=None):
         assert isinstance(lexicon, Lexicon)
         assert isinstance(documents, Documents)
         assert isinstance(path, str)
+        if binary_format is not None:
+            assert isinstance(binary_format, BinaryFormat)
+            self._bin_fmt = binary_format
+        else:
+            self._bin_fmt = BinaryFormat.default()
+
         self._lexicon = lexicon
         self._documents = documents
         self._f = open(path, 'rb')
@@ -270,17 +315,19 @@ class InvertedIndex(object):
         return partial_result
 
     def _datum_at(self, i):
-        return mmap_decode_datum(self._mmap, i)
+        return self._bin_fmt.decode_datum(
+            self._mmap[i:i + self._bin_fmt.datum_bytes])
 
     def _time_int_at(self, i):
-        return mmap_decode_time_int(self._mmap, i)
+        return self._bin_fmt.decode_time_interval(
+            self._mmap[i:i + self._bin_fmt.time_interval_bytes])
 
     def _get_locations(self, offset, count):
         for _ in range(count):
             index = self._datum_at(offset)
-            offset += DATUM_SIZE
+            offset += self._bin_fmt.datum_bytes
             start, end = self._time_int_at(offset)
-            offset += TIME_INT_SIZE
+            offset += self._bin_fmt.time_interval_bytes
             yield InvertedIndex.LocationResult(
                 index, millis_to_seconds(start),
                 millis_to_seconds(end))
@@ -289,20 +336,22 @@ class InvertedIndex(object):
         prev_doc_id = None
         for _ in range(count):
             doc_id = self._datum_at(offset)
-            assert doc_id < len(self._documents), 'Invalid document id: {}'.format(doc_id)
+            assert doc_id < len(self._documents), \
+                'Invalid document id: {}'.format(doc_id)
             assert prev_doc_id is None or doc_id > prev_doc_id, \
                 'Uh oh... document ids should be ascending, but {} <= {}'.format(
                     doc_id, prev_doc_id)
-            offset += DATUM_SIZE
+            offset += self._bin_fmt.datum_bytes
 
             posting_count = self._datum_at(offset)
             assert posting_count > 0, 'Expected at least one posting'
-            offset += DATUM_SIZE
+            offset += self._bin_fmt.datum_bytes
 
             yield InvertedIndex.DocumentResult(
                 id=doc_id, count=posting_count,
                 locations=self._get_locations(offset, posting_count))
-            offset += posting_count * (DATUM_SIZE + TIME_INT_SIZE)
+            offset += posting_count * (
+                self._bin_fmt.datum_bytes + self._bin_fmt.time_interval_bytes)
             prev_doc_id = doc_id
 
     def unigram_search(self, word):
@@ -322,13 +371,13 @@ class InvertedIndex(object):
         word_id = self._datum_at(curr_offset)
         assert word_id == word.id, \
             'Expected word id {}, got {}'.format(word.id, word_id)
-        curr_offset += DATUM_SIZE
+        curr_offset += self._bin_fmt.datum_bytes
 
         doc_count = self._datum_at(curr_offset)
         assert doc_count > 0, 'Expected at least one document'
         assert doc_count <= len(self._documents), \
             'Uh oh... too many documents: {}'.format(doc_count)
-        curr_offset += DATUM_SIZE
+        curr_offset += self._bin_fmt.datum_bytes
 
         return InvertedIndex.Result(
             count=doc_count,
@@ -364,16 +413,13 @@ class InvertedIndex(object):
                     if locations is not None:
                         yield InvertedIndex.DocumentResult(
                             id=a_head.id, count=len(locations),
-                            locations=sequence_to_generator(locations))
+                            locations=iter(locations))
                 a_head = next(a.documents)
                 b_head = next(b.documents)
             elif a_head.id < b_head.id:
                 a_head = next(a.documents)
             else:
                 b_head = next(b.documents)
-
-
-UNKNOWN_TOKEN = '<UNKNOWN>'
 
 
 class DocumentData(object):
@@ -387,10 +433,16 @@ class DocumentData(object):
             'tokens'        # Generator for tokens in the interval
         ])
 
-    def __init__(self, path, lexicon, documents):
+    def __init__(self, path, lexicon, documents, binary_format=None):
         assert isinstance(lexicon, Lexicon)
         assert isinstance(documents, Documents)
         assert isinstance(path, str)
+        if binary_format is not None:
+            assert isinstance(binary_format, BinaryFormat)
+            self._bin_fmt = binary_format
+        else:
+            self._bin_fmt = BinaryFormat.default()
+
         self._documents = documents
         self._lexicon = lexicon
         self._f = open(path, 'rb')
@@ -410,19 +462,21 @@ class DocumentData(object):
             self._f = None
 
     def _datum_at(self, i):
-        return mmap_decode_datum(self._mmap, i)
+        return self._bin_fmt.decode_datum(
+            self._mmap[i:i + self._bin_fmt.datum_bytes])
 
     def _time_int_at(self, i):
-        return mmap_decode_time_int(self._mmap, i)
+        return self._bin_fmt.decode_time_interval(
+            self._mmap[i:i + self._bin_fmt.time_interval_bytes])
 
     def _tokens(self, offset, n, decode):
         for i in range(n):
-            token_id = self._datum_at(offset + i * DATUM_SIZE)
+            token_id = self._datum_at(offset + i * self._bin_fmt.datum_bytes)
             if decode:
                 try:
                     token = self._lexicon[token_id].token
                 except IndexError:
-                    token = UNKNOWN_TOKEN
+                    token = Lexicon.UNKNOWN_TOKEN
                 yield token
             else:
                 yield token_id
@@ -448,7 +502,7 @@ class DocumentData(object):
         elif start_pos >= end_pos:
             return empty_generator()
 
-        start_offset = doc.token_data_offset + start_pos * DATUM_SIZE
+        start_offset = doc.token_data_offset + start_pos * self._bin_fmt.datum_bytes
         return self._tokens(start_offset, end_pos - start_pos, decode)
 
     def token_intervals(self, doc, start_time, end_time, decode=False):
@@ -464,19 +518,21 @@ class DocumentData(object):
 
         base_idx_offset = doc.time_index_offset
         base_token_offset = doc.token_data_offset
-        num_intervals = (doc.token_data_offset - doc.time_index_offset) / (TIME_INT_SIZE + DATUM_SIZE)
+        num_intervals = (doc.token_data_offset - doc.time_index_offset) / (
+            self._bin_fmt.time_interval_bytes + self._bin_fmt.datum_bytes)
         for i in range(num_intervals):
-            curr_offset = base_idx_offset + i * (TIME_INT_SIZE + DATUM_SIZE)
+            curr_offset = base_idx_offset + i * (
+                self._bin_fmt.time_interval_bytes + self._bin_fmt.datum_bytes)
             start, end = self._time_int_at(curr_offset)
-            curr_offset + TIME_INT_SIZE
+            curr_offset + self._bin_fmt.time_interval_bytes
             position = self._datum_at(curr_offset)
-            curr_offset += DATUM_SIZE
+            curr_offset += self._bin_fmt.datum_bytes
 
             if i == num_intervals - 1:
                 next_position = doc.length
             else:
                 # Peek at next entry, skip time interval
-                curr_offset += TIME_INT_SIZE
+                curr_offset += self._bin_fmt.time_interval_bytes
                 next_position = self._datum_at(curr_offset)
 
             if min(end, end_time) - max(start, start_time) > 0:
@@ -484,6 +540,6 @@ class DocumentData(object):
                 yield DocumentData.Interval(
                     start=start, end=end, position=position, length=length,
                     tokens=self._tokens(
-                        base_token_offset + position * DATUM_SIZE,
+                        base_token_offset + position * self._bin_fmt.datum_bytes,
                         length, decode
                     ))

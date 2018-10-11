@@ -16,9 +16,10 @@ DEFAULT_WORKERS = os.cpu_count()
 def get_args():
     p = argparse.ArgumentParser()
     p.add_argument('index_dir', type=str,
-                    help='Directory containing index files')
+                   help='Directory containing index files')
     p.add_argument('-j', dest='workers', type=int, default=DEFAULT_WORKERS,
-                   help='Number of CPU cores to use. Default: {}'.format(DEFAULT_WORKERS))
+                   help='Number of CPU cores to use. Default: {}'.format(
+                        DEFAULT_WORKERS))
     p.add_argument('--limit', dest='limit', type=int,
                    help='Limit the number of documents to scan')
     return p.parse_args()
