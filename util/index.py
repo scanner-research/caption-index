@@ -13,7 +13,13 @@ def tokenize(s):
 
 class Lexicon(object):
 
-    Word = namedtuple('Word', ['id', 'token', 'count', 'offset'])
+    Word = namedtuple(
+        'Word', [
+            'id',       # Token id
+            'token',    # String representation
+            'count',    # Number of occurrences
+            'offset'    # Offset into index file
+        ])
 
     def __init__(self, words):
         """List of words, where w.id is the index in the list"""
@@ -165,6 +171,7 @@ def millis_to_seconds(t):
 def empty_generator():
     return
     yield
+
 
 def sequence_to_generator(seq):
     for s in seq:
