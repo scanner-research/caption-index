@@ -160,7 +160,7 @@ def write_inv_index(inv_index, out_path):
                     f.write(encode_time_int(start, end))
 
 
-def write_doc_binary(batch_doc_lines, out_path):
+def encode_doc_batch(batch_doc_lines, out_path):
     """Returns [(time_idx_offset, token_data_offset, doc_len)]"""
     batch_doc_offsets = deque()
     with open(out_path, 'wb') as f:
@@ -199,7 +199,7 @@ def index_batch(doc_batch, out_path_prefix):
         batch_doc_lines.append((doc_id, doc_lines))
 
     write_inv_index(batch_inv_index, out_path_prefix + TMP_INV_IDX_EXT)
-    batch_doc_offsets = write_doc_binary(batch_doc_lines,
+    batch_doc_offsets = encode_doc_batch(batch_doc_lines,
                                          out_path_prefix + TMP_BIN_DOC_EXT)
 
     return batch_doc_offsets

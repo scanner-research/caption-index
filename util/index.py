@@ -373,10 +373,19 @@ class InvertedIndex(object):
                 b_head = next(b.documents)
 
 
-UNKNOWN_TOKEN = '<unk>'
+UNKNOWN_TOKEN = '<UNKNOWN>'
 
 
 class DocumentData(object):
+
+    Interval = namedtuple(
+        'Interval', [
+            'start',        # Start time in seconds
+            'end',          # End time in seconds
+            'position',     # Start position in document
+            'length',       # Number of tokens in interval
+            'tokens'        # Generator for tokens in the interval
+        ])
 
     def __init__(self, path, lexicon, documents):
         assert isinstance(lexicon, Lexicon)
@@ -406,29 +415,9 @@ class DocumentData(object):
     def _time_int_at(self, i):
         return mmap_decode_time_int(self._mmap, i)
 
-    def tokens(self, doc, start_pos=None, end_pos=None, decode=False):
-        """Generator over tokens"""
-        if isinstance(doc, Documents.Document):
-            doc = self._documents[doc.id]
-        else:
-            doc = self._documents[doc]
-
-        assert doc.length > 0, 'Invalid document length: {}'.format(doc.length)
-        assert doc.token_data_offset > 0, 'Invalid data offset'
-
-        if start_pos is None:
-            start_pos = 0
-        elif start_pos < 0:
-            raise ValueError('Start position cannot be negative: {}'.format(
-                             start_pos))
-
-        if end_pos is None or end_pos > doc.length:
-            end_pos = doc.length
-
-        base_offset = doc.token_data_offset
-        curr_pos = start_pos
-        while curr_pos < end_pos:
-            token_id = self._datum_at(base_offset + curr_pos * DATUM_SIZE)
+    def _tokens(self, offset, n, decode):
+        for i in range(n):
+            token_id = self._datum_at(offset + i * DATUM_SIZE)
             if decode:
                 try:
                     token = self._lexicon[token_id].token
@@ -437,4 +426,64 @@ class DocumentData(object):
                 yield token
             else:
                 yield token_id
-            curr_pos += 1
+
+    def tokens(self, doc, start_pos=None, end_pos=None, decode=False):
+        """Generator over tokens in the range (end is non-inclusive)"""
+        if isinstance(doc, Documents.Document):
+            doc = self._documents[doc.id]
+        else:
+            doc = self._documents[doc]
+
+        assert doc.length > 0, 'Invalid document length: {}'.format(doc.length)
+        assert doc.token_data_offset > 0, 'Invalid data offset'
+
+        if end_pos is None or end_pos > doc.length:
+            end_pos = doc.length
+
+        if start_pos is None:
+            start_pos = 0
+        elif start_pos < 0:
+            raise ValueError('Start position cannot be negative: {}'.format(
+                             start_pos))
+        elif start_pos >= end_pos:
+            return empty_generator()
+
+        start_offset = doc.token_data_offset + start_pos * DATUM_SIZE
+        return self._tokens(start_offset, end_pos - start_pos, decode)
+
+    def token_intervals(self, doc, start_time, end_time, decode=False):
+        """Generator over transcript intervals and tokens"""
+        if isinstance(doc, Documents.Document):
+            doc = self._documents[doc.id]
+        else:
+            doc = self._documents[doc]
+
+        assert doc.length > 0, 'Invalid document length: {}'.format(doc.length)
+        assert doc.time_index_offset > 0, 'Invalid time index offset'
+        assert doc.token_data_offset > 0, 'Invalid data offset'
+
+        base_idx_offset = doc.time_index_offset
+        base_token_offset = doc.token_data_offset
+        num_intervals = (doc.token_data_offset - doc.time_index_offset) / (TIME_INT_SIZE + DATUM_SIZE)
+        for i in range(num_intervals):
+            curr_offset = base_idx_offset + i * (TIME_INT_SIZE + DATUM_SIZE)
+            start, end = self._time_int_at(curr_offset)
+            curr_offset + TIME_INT_SIZE
+            position = self._datum_at(curr_offset)
+            curr_offset += DATUM_SIZE
+
+            if i == num_intervals - 1:
+                next_position = doc.length
+            else:
+                # Peek at next entry, skip time interval
+                curr_offset += TIME_INT_SIZE
+                next_position = self._datum_at(curr_offset)
+
+            if min(end, end_time) - max(start, start_time) > 0:
+                length = next_position - position
+                yield DocumentData.Interval(
+                    start=start, end=end, position=position, length=length,
+                    tokens=self._tokens(
+                        base_token_offset + position * DATUM_SIZE,
+                        length, decode
+                    ))
