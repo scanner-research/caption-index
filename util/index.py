@@ -69,8 +69,17 @@ class Lexicon(object):
 
 class Documents(object):
 
+    Document = namedtuple(
+        'Document', [
+            'id',
+            'name',
+            'length',
+            'time_index_offset',
+            'token_data_offset'
+        ])
+
     def __init__(self, docs):
-        """List of document names, where index is the id"""
+        """List of Document, where index is the id"""
         self._docs = docs
 
     def __iter__(self):
@@ -82,10 +91,11 @@ class Documents(object):
             return self._docs[key]
         elif isinstance(key, str):
             # Get doc id by name (KeyError)
-            try:
-                return self._docs.index(key)
-            except ValueError as e:
-                raise KeyError(e)
+            for d in self._docs:
+                if d.name == key:
+                    return d.id
+            else:
+                raise KeyError('No document named {}'.format(key))
         raise TypeError('Not supported for {}'.format(type(key)))
 
     def __contains__(self, key):
@@ -101,13 +111,24 @@ class Documents(object):
     def store(self, path):
         with open(path, 'w') as f:
             for d in self._docs:
-                f.write(d)
-                f.write('\n')
+                f.write('{}\t{}\t{}\t{}\n'.format(
+                    d.name, d.length, d.time_index_offset, d.token_data_offset
+                ))
 
     @staticmethod
     def load(path):
         with open(path, 'r') as f:
-            return Documents([d.strip() for d in f])
+            documents = []
+            for i, line in enumerate(f):
+                name, length, time_index_offset, token_data_offset = line.strip().split('\t')
+                length = int(length)
+                time_index_offset = int(time_index_offset)
+                token_data_offset = int(token_data_offset)
+                documents.append(Documents.Document(
+                    id=i, name=name, length=length,
+                    time_index_offset=time_index_offset,
+                    token_data_offset=token_data_offset))
+            return Documents(documents)
 
 
 ENDIAN = 'little'
@@ -180,15 +201,15 @@ def sequence_to_generator(seq):
 
 class InvertedIndex(object):
 
-    Location = namedtuple(
-        'Location', [
+    LocationResult = namedtuple(
+        'LocationResult', [
             'index',    # Position in document
             'start',    # Start time in seconds
             'end'       # End time in seconds
         ])
 
-    Document = namedtuple(
-        'Document', [
+    DocumentResult = namedtuple(
+        'DocumentResult', [
             'id',           # Document ID
             'count',        # Number of locations
             'locations'     # Generator of locations
@@ -231,7 +252,7 @@ class InvertedIndex(object):
             for t in tokens:
                 if t not in self._lexicon:
                     raise ValueError('{} is not in the lexicon'.format(t))
-        elif isinstance(list):
+        elif isinstance(text, list):
             tokens = text
             if len(tokens) == 0:
                 raise ValueError('No words in input')
@@ -260,7 +281,7 @@ class InvertedIndex(object):
             offset += DATUM_SIZE
             start, end = self._time_int_at(offset)
             offset += TIME_INT_SIZE
-            yield InvertedIndex.Location(
+            yield InvertedIndex.LocationResult(
                 index, millis_to_seconds(start),
                 millis_to_seconds(end))
 
@@ -268,6 +289,7 @@ class InvertedIndex(object):
         prev_doc_id = None
         for _ in range(count):
             doc_id = self._datum_at(offset)
+            assert doc_id < len(self._documents), 'Invalid document id: {}'.format(doc_id)
             assert prev_doc_id is None or doc_id > prev_doc_id, \
                 'Uh oh... document ids should be ascending, but {} <= {}'.format(
                     doc_id, prev_doc_id)
@@ -277,7 +299,7 @@ class InvertedIndex(object):
             assert posting_count > 0, 'Expected at least one posting'
             offset += DATUM_SIZE
 
-            yield InvertedIndex.Document(
+            yield InvertedIndex.DocumentResult(
                 id=doc_id, count=posting_count,
                 locations=self._get_locations(offset, posting_count))
             offset += posting_count * (DATUM_SIZE + TIME_INT_SIZE)
@@ -304,7 +326,7 @@ class InvertedIndex(object):
 
         doc_count = self._datum_at(curr_offset)
         assert doc_count > 0, 'Expected at least one document'
-        assert doc_count < len(self._documents), \
+        assert doc_count <= len(self._documents), \
             'Uh oh... too many documents: {}'.format(doc_count)
         curr_offset += DATUM_SIZE
 
@@ -328,7 +350,7 @@ class InvertedIndex(object):
                         if a_ent.index + gap == b_ent.index:
                             if locations is None:
                                 locations = deque()
-                            locations.append(InvertedIndex.Location(
+                            locations.append(InvertedIndex.LocationResult(
                                 a_ent.index, a_ent.start, b_ent.end))
                             a_ent = next(a_head.locations)
                             b_ent = next(b_head.locations)
@@ -340,7 +362,7 @@ class InvertedIndex(object):
                     pass
                 finally:
                     if locations is not None:
-                        yield InvertedIndex.Document(
+                        yield InvertedIndex.DocumentResult(
                             id=a_head.id, count=len(locations),
                             locations=sequence_to_generator(locations))
                 a_head = next(a.documents)
@@ -349,3 +371,70 @@ class InvertedIndex(object):
                 a_head = next(a.documents)
             else:
                 b_head = next(b.documents)
+
+
+UNKNOWN_TOKEN = '<unk>'
+
+
+class DocumentData(object):
+
+    def __init__(self, path, lexicon, documents):
+        assert isinstance(lexicon, Lexicon)
+        assert isinstance(documents, Documents)
+        assert isinstance(path, str)
+        self._documents = documents
+        self._lexicon = lexicon
+        self._f = open(path, 'rb')
+        self._mmap = mmap.mmap(self._f.fileno(), 0, access=mmap.ACCESS_READ)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exception_type, exception_value, traceback):
+        self.close()
+
+    def close(self):
+        if self._f is not None:
+            self._mmap.close()
+            self._mmap = None
+            self._f.close()
+            self._f = None
+
+    def _datum_at(self, i):
+        return mmap_decode_datum(self._mmap, i)
+
+    def _time_int_at(self, i):
+        return mmap_decode_time_int(self._mmap, i)
+
+    def tokens(self, doc, start_pos=None, end_pos=None, decode=False):
+        """Generator over tokens"""
+        if isinstance(doc, Documents.Document):
+            doc = self._documents[doc.id]
+        else:
+            doc = self._documents[doc]
+
+        assert doc.length > 0, 'Invalid document length: {}'.format(doc.length)
+        assert doc.token_data_offset > 0, 'Invalid data offset'
+
+        if start_pos is None:
+            start_pos = 0
+        elif start_pos < 0:
+            raise ValueError('Start position cannot be negative: {}'.format(
+                             start_pos))
+
+        if end_pos is None or end_pos > doc.length:
+            end_pos = doc.length
+
+        base_offset = doc.token_data_offset
+        curr_pos = start_pos
+        while curr_pos < end_pos:
+            token_id = self._datum_at(base_offset + curr_pos * DATUM_SIZE)
+            if decode:
+                try:
+                    token = self._lexicon[token_id].token
+                except IndexError:
+                    token = UNKNOWN_TOKEN
+                yield token
+            else:
+                yield token_id
+            curr_pos += 1

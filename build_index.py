@@ -14,11 +14,15 @@ from tqdm import tqdm
 
 from util.index import tokenize, Lexicon, Documents, \
     encode_datum, decode_datum, encode_time_int, \
-    DATUM_SIZE, TIME_INT_SIZE, MAX_TIME_INT_VALUE
+    DATUM_SIZE, TIME_INT_SIZE, MAX_TIME_INT_VALUE, MAX_DATUM_VALUE
 
 
 DEFAULT_OUT_DIR = 'out'
 DEFAULT_WORKERS = os.cpu_count()
+
+
+TMP_INV_IDX_EXT = '.inv.bin'
+TMP_BIN_DOC_EXT = '.doc.bin'
 
 
 N_WORKERS = None
@@ -69,13 +73,13 @@ def get_doc_words(doc_path):
     return words
 
 
-def get_words(doc_dir, docs):
+def get_words(doc_dir, doc_names):
     assert isinstance(doc_dir, str)
-    assert isinstance(docs, Documents)
+    assert isinstance(doc_names, list)
 
     words = Counter()
     words_lock = Lock()
-    with tqdm(total=len(docs)) as pbar, Pool(processes=N_WORKERS) as pool:
+    with tqdm(total=len(doc_names)) as pbar, Pool(processes=N_WORKERS) as pool:
         pbar.set_description('Building lexicon')
 
         def collect(result):
@@ -84,7 +88,7 @@ def get_words(doc_dir, docs):
             pbar.update(1)
 
         async_results = deque()
-        for d in docs:
+        for d in doc_names:
             doc_path = os.path.join(doc_dir, d)
             async_results.append(
                 pool.apply_async(get_doc_words, (doc_path,), callback=collect))
@@ -97,10 +101,11 @@ def get_words(doc_dir, docs):
     return words
 
 
-def inv_index_single_doc(doc_path, lexicon):
+def index_single_doc(doc_path, lexicon):
     assert isinstance(lexicon, Lexicon)
 
-    doc_inv_index = defaultdict(deque)
+    doc_inv_index = defaultdict(deque)  # token_id -> [postings]
+    doc_lines = deque()                 # [(position, start, end, [tokens])]
     try:
         subs = load_srt(doc_path)
         doc_position = 0
@@ -112,7 +117,12 @@ def inv_index_single_doc(doc_path, lexicon):
             if end - start > MAX_TIME_INT_VALUE:
                 print('Warning: end - start > {}ms'.format(MAX_TIME_INT_VALUE))
                 end = start + MAX_TIME_INT_VALUE
+
+            tokens = deque()
+            entry_start_position = doc_position
+
             for t in tokenize(s.text):
+                token = None
                 try:
                     try:
                         token = lexicon[t]
@@ -121,27 +131,19 @@ def inv_index_single_doc(doc_path, lexicon):
                     doc_inv_index[token.id].append((doc_position, start, end))
                 finally:
                     doc_position += 1
+                    tokens.append(MAX_DATUM_VALUE if token is None else token.id)
+
+            doc_lines.append((entry_start_position, start, end, tokens))
     except Exception as e:
         print(e)
-    return doc_inv_index
+    return doc_lines, doc_inv_index
 
 
-def inv_index_batch(doc_batch, out_path):
-    lexicon = WORKER_LEXICON
-
-    assert isinstance(out_path, str)
-    assert isinstance(lexicon, Lexicon)
-
-    batch_inv_index = defaultdict(deque)     # token -> [(doc, [postings])]
-    for doc_id, doc_path in doc_batch:
-        doc_index = inv_index_single_doc(doc_path, lexicon)
-        for token_id, postings in doc_index.items():
-            batch_inv_index[token_id].append((doc_id, postings))
-
+def write_inv_index(inv_index, out_path):
     with open(out_path, 'wb') as f:
         # Order by increasing token_id
-        for token_id in sorted(batch_inv_index):
-            docs = batch_inv_index[token_id]
+        for token_id in sorted(inv_index):
+            docs = inv_index[token_id]
             assert len(docs) > 0
 
             f.write(encode_datum(token_id))    # Token id
@@ -157,38 +159,104 @@ def inv_index_batch(doc_batch, out_path):
                     f.write(encode_datum(position))
                     f.write(encode_time_int(start, end))
 
-    return len(doc_batch)
+
+def write_doc_binary(batch_doc_lines, out_path):
+    """Returns [(time_idx_offset, token_data_offset, doc_len)]"""
+    batch_doc_offsets = deque()
+    with open(out_path, 'wb') as f:
+        for doc_id, doc_lines in batch_doc_lines:
+            doc_time_idx_start = f.tell()
+            for position, start, end, _ in doc_lines:
+                f.write(encode_time_int(start, end))
+                f.write(encode_datum(position))
+
+            doc_len = 0
+            doc_token_data_start = f.tell()
+            for _, _, _, tokens in doc_lines:
+                for t in tokens:
+                    f.write(encode_datum(t))
+                doc_len += len(tokens)
+            batch_doc_offsets.append(
+                (doc_time_idx_start, doc_token_data_start, doc_len))
+    return batch_doc_offsets
 
 
-def inv_index_all_docs(doc_dir, docs, lexicon, out_dir, batch_size=100):
-    assert isinstance(docs, Documents)
+def index_batch(doc_batch, out_path_prefix):
+    """Build an inverted index and binary reencode documents"""
+    lexicon = WORKER_LEXICON
+
+    assert isinstance(out_path_prefix, str)
+    assert isinstance(lexicon, Lexicon)
+
+    batch_inv_index = defaultdict(deque)    # token_id -> [(doc, [postings])]
+    batch_doc_lines = deque()
+    for doc_id, doc_path in doc_batch:
+        doc_lines, doc_inv_index = index_single_doc(doc_path, lexicon)
+
+        for token_id, postings in doc_inv_index.items():
+            batch_inv_index[token_id].append((doc_id, postings))
+
+        batch_doc_lines.append((doc_id, doc_lines))
+
+    write_inv_index(batch_inv_index, out_path_prefix + TMP_INV_IDX_EXT)
+    batch_doc_offsets = write_doc_binary(batch_doc_lines,
+                                         out_path_prefix + TMP_BIN_DOC_EXT)
+
+    return batch_doc_offsets
+
+
+def index_all_docs(doc_dir, doc_names, lexicon, bin_doc_path, out_dir,
+                   batch_size=100):
+    """Builds inverted indexes and reencode documents in binary"""
+
+    assert isinstance(doc_names, list)
     assert isinstance(lexicon, Lexicon)
 
     global WORKER_LEXICON
     WORKER_LEXICON = lexicon
 
-    with tqdm(total=len(docs)) as pbar, Pool(processes=N_WORKERS) as pool:
+    with tqdm(total=len(doc_names)) as pbar, Pool(processes=N_WORKERS) as pool:
         async_results = deque()
-        pbar.set_description('Building inverted index')
+        pbar.set_description('Building indexes')
 
-        def progress(n_indexed):
-            pbar.update(n_indexed)
+        def progress(doc_offsets):
+            pbar.update(len(doc_offsets))
 
-        for base_id in range(0, len(docs), batch_size):
+        worker_args = deque()
+        for base_id in range(0, len(doc_names), batch_size):
             doc_batch = [
-                (i, os.path.join(doc_dir, docs[i]))
-                for i in range(base_id, min(base_id + batch_size, len(docs)))
+                (i, os.path.join(doc_dir, doc_names[i]))
+                for i in range(base_id, min(base_id + batch_size, len(doc_names)))
             ]
-            out_path = os.path.join(out_dir, '{}.bin'.format(base_id))
-
+            out_path_prefix = os.path.join(out_dir, str(base_id))
             async_results.append(pool.apply_async(
-                inv_index_batch,
-                (doc_batch, out_path),
-                callback=progress))
+                index_batch, (doc_batch, out_path_prefix), callback=progress))
+            worker_args.append((doc_batch, out_path_prefix))
 
-        # Forces exceptions to be rethrown
-        for a in async_results:
-            a.get()
+        # Merge the offsets and generate a new set of Documents with offsets
+        # annotated
+        documents = [None] * len(doc_names)
+        global_offset = 0
+        for args, async in zip(worker_args, async_results):
+            doc_batch, out_path_prefix = args
+            doc_offsets = async.get()
+            for a, b in zip(doc_batch, doc_offsets):
+                doc_id, _ = a
+                doc_time_idx_offset, doc_token_data_offset, doc_length = b
+                documents[doc_id] = Documents.Document(
+                    id=doc_id, name=doc_names[doc_id], length=doc_length,
+                    time_index_offset=doc_time_idx_offset + global_offset,
+                    token_data_offset=doc_token_data_offset + global_offset)
+            global_offset += os.path.getsize(out_path_prefix + TMP_BIN_DOC_EXT)
+
+        assert None not in documents, 'Not all documents were indexed'
+
+        # Cat the files together
+        bin_doc_paths = [p + TMP_BIN_DOC_EXT for _, p in worker_args]
+        with open(bin_doc_path, 'wb') as f:
+            check_call(['cat'] + bin_doc_paths, stdout=f)
+
+        return Documents(documents)
 
 
 class MergeIndexParser(object):
@@ -339,18 +407,19 @@ def merge_inv_indexes(idx_paths, out_path, min_token, max_token):
     return jump_offsets
 
 
-def parallel_merge_inv_indexes(idx_dir, lexicon, out_path, tmp_dir):
+def parallel_merge_inv_indexes(idx_dir, lexicon, out_path, merge_dir):
+
     assert isinstance(lexicon, Lexicon)
     global WORKER_LEXICON
     WORKER_LEXICON = lexicon
 
-    if N_WORKERS > 0 and not os.path.exists(tmp_dir):
-        os.makedirs(tmp_dir)
+    if not os.path.exists(merge_dir):
+        os.makedirs(merge_dir)
 
     try:
         idx_paths = [
             os.path.join(idx_dir, x)
-            for x in os.listdir(idx_dir) if x.endswith('.bin')
+            for x in os.listdir(idx_dir) if x.endswith(TMP_INV_IDX_EXT)
         ]
 
         with tqdm(total=N_WORKERS) as pbar:
@@ -367,7 +436,8 @@ def parallel_merge_inv_indexes(idx_dir, lexicon, out_path, tmp_dir):
                 # Partition across the lexicon
                 for file_no, i in enumerate(range(0, len(lexicon),
                                             tokens_per_worker)):
-                    new_idx_path = os.path.join(tmp_dir, '{}.bin'.format(file_no))
+                    new_idx_path = os.path.join(
+                        merge_dir, '{}{}'.format(file_no, TMP_INV_IDX_EXT))
                     new_idx_paths.append(new_idx_path)
                     async_results.append(pool.apply_async(
                         merge_inv_indexes,
@@ -393,34 +463,35 @@ def parallel_merge_inv_indexes(idx_dir, lexicon, out_path, tmp_dir):
                 # Cat all the files together
                 with open(out_path, 'wb') as f:
                     check_call(['cat'] + new_idx_paths, stdout=f)
-                pbar.update(1)
+                progress(None)
 
             if -1 in jump_offsets:
                 print('Warning: not all lexicon words have been indexed')
             return jump_offsets
     finally:
-        shutil.rmtree(tmp_dir, True)
+        shutil.rmtree(merge_dir, True)
 
 
 def main(doc_dir, out_dir, workers, limit=None):
     global N_WORKERS
     N_WORKERS = workers
 
-    docs = list(sorted(list_subs(doc_dir)))
+    # Load document names
+    doc_names = list(sorted(list_subs(doc_dir)))
     if limit is not None:
-        docs = docs[:limit]
-    docs = Documents(docs)
+        doc_names = doc_names[:limit]
 
     if not os.path.isdir(out_dir):
         os.makedirs(out_dir)
 
+    # Load or build a lexicon
     lex_path = os.path.join(out_dir, 'words.lex')
     if os.path.exists(lex_path):
         print('Loading lexicon: {}'.format(lex_path))
         lexicon = Lexicon.load(lex_path)
     else:
         # Save lexicon without offsets initally
-        wordcounts = get_words(doc_dir, docs)
+        wordcounts = get_words(doc_dir, doc_names)
         lexicon = Lexicon([
             Lexicon.Word(i, w, wordcounts[w], -1)
             for i, w in enumerate(sorted(wordcounts.keys()))
@@ -428,31 +499,43 @@ def main(doc_dir, out_dir, workers, limit=None):
         lexicon.store(lex_path)
         del wordcounts
 
-    # Save the document list
-    doc_list_path = os.path.join(out_dir, 'docs.list')
-    docs.store(doc_list_path)
-
-    chunk_dir = os.path.join(out_dir, 'parts')
+    # Build inverted index chunks and reencode the documents
+    chunk_dir = os.path.join(out_dir, 'chunks')
+    docs_path = os.path.join(out_dir, 'docs.list')
+    bin_docs_path = os.path.join(out_dir, 'docs.bin')
     if not os.path.exists(chunk_dir):
         os.makedirs(chunk_dir)
         try:
-            inv_index_all_docs(doc_dir, docs, lexicon, chunk_dir)
+            documents = index_all_docs(doc_dir, doc_names, lexicon,
+                                       bin_docs_path, chunk_dir)
+
+            # Store the document list
+            print('Storing document list: {}'.format(docs_path))
+            documents.store(docs_path)
+            del documents
         except:
             shutil.rmtree(chunk_dir)
             raise
     else:
         print('Found existing indexes: {}'.format(chunk_dir))
+    assert os.path.exists(docs_path), 'Missing: {}'.format(docs_path)
+    assert os.path.exists(bin_docs_path), 'Missing: {}'.format(bin_docs_path)
 
+    # Merge the inverted index chunks
     idx_path = os.path.join(out_dir, 'index.bin')
-    tmp_dir = os.path.join(out_dir, 'tmp')
-    jump_offsets = parallel_merge_inv_indexes(chunk_dir, lexicon, idx_path, tmp_dir)
+    merge_dir = os.path.join(out_dir, 'merge')
+    jump_offsets = parallel_merge_inv_indexes(chunk_dir, lexicon, idx_path,
+                                              merge_dir)
+    assert os.path.exists(idx_path), 'Missing: {}'.format(idx_path)
 
     # Resave the lexicon with offsets
+    print('Storing lexicon with offsets: {}'.format(lex_path))
     lexicon = Lexicon([
         Lexicon.Word(w.id, w.token, w.count, jump_offsets[w.id])
         for w in lexicon
     ])
     lexicon.store(lex_path)
+    assert os.path.exists(lex_path), 'Missing: {}'.format(idx_path)
 
 
 if __name__ == '__main__':
