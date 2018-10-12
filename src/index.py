@@ -130,6 +130,7 @@ class BinaryFormat(object):
     Supports two data types:
         - time interval
         - datum
+        - byte
     """
 
     Config = namedtuple(

@@ -11,6 +11,7 @@ import pysrt
 import os
 import shutil
 import sys
+import traceback
 from collections import defaultdict, deque, namedtuple, Counter
 from multiprocessing import Pool
 from subprocess import check_call
@@ -21,7 +22,6 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)) + '/../src')
 
 import nlp
 from index import Lexicon, Documents, BinaryFormat
-
 
 
 BINARY_FORMAT = BinaryFormat.default()
@@ -138,11 +138,11 @@ def index_single_doc(doc_path, lexicon):
             tokens = deque()
             entry_start_position = doc_position
 
-            for t in nlp.tokenize_and_tag(s.text):
+            for t in nlp.tokenize(s.text): # TODO: pos tags
                 token = None
                 try:
                     try:
-                        token = lexicon[t.text]
+                        token = lexicon[t]
                     except KeyError:
                         print('Unknown token: {}'.format(t))
                         continue
@@ -152,7 +152,8 @@ def index_single_doc(doc_path, lexicon):
                     tokens.append((
                         BINARY_FORMAT.max_datum_value
                         if token is None else token.id,
-                        nlp.POSTag.encode(t.tag_)
+                        nlp._POS_UNKNOWN_ID # TODO: find a way to make this
+                                            # feasibly fast.
                     ))
 
             doc_lines.append((entry_start_position, start, end, tokens))
@@ -161,7 +162,7 @@ def index_single_doc(doc_path, lexicon):
             print('Empty file: {}'.format(doc_path))
     except Exception as e:
         print('Failed to index: {}'.format(doc_path))
-        print(e)
+        traceback.print_exc()
     return doc_lines, doc_inv_index
 
 
