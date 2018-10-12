@@ -138,7 +138,7 @@ def index_single_doc(doc_path, lexicon):
             tokens = deque()
             entry_start_position = doc_position
 
-            for t in nlp.tokenize(s.text): # TODO: pos tags
+            for t in nlp.tokenize(s.text):
                 token = None
                 try:
                     try:
@@ -149,12 +149,9 @@ def index_single_doc(doc_path, lexicon):
                     doc_inv_index[token.id].append((doc_position, start, end))
                 finally:
                     doc_position += 1
-                    tokens.append((
+                    tokens.append(
                         BINARY_FORMAT.max_datum_value
-                        if token is None else token.id,
-                        nlp._POS_UNKNOWN_ID # TODO: find a way to make this
-                                            # feasibly fast.
-                    ))
+                        if token is None else token.id)
 
             doc_lines.append((entry_start_position, start, end, tokens))
 
@@ -203,9 +200,8 @@ def write_doc_data(doc_lines, out_path):
         doc_len = 0
         doc_token_data_start = f.tell()
         for _, _, _, tokens in doc_lines:
-            for t, pos in tokens:
+            for t in tokens:
                 f.write(BINARY_FORMAT.encode_datum(t))
-                f.write(BINARY_FORMAT.encode_byte(pos))
             doc_len += len(tokens)
     return doc_time_idx_start, doc_token_data_start, doc_len
 

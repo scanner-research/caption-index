@@ -12,6 +12,8 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)) + '/../scripts')
 
 from index import BinaryFormat, Lexicon, Documents, InvertedIndex, DocumentData
 from build import main as build_main
+from scan import main as scan_main
+from search import main as search_main
 
 
 TMP_DIR = None
@@ -104,9 +106,9 @@ class TestDocumentData(unittest.TestCase):
         documents, lexicon = get_docs_and_lex(idx_dir)
         with DocumentData(data_path, lexicon, documents) as docdata:
             for i in range(len(documents)):
-                for (t, pos) in docdata.tokens(i):
+                for t in docdata.tokens(i):
                     pass
-                for (t, pos) in docdata.tokens(i, decode=True):
+                for t in docdata.tokens(i, decode=True):
                     pass
 
     def test_time_index(self):
@@ -116,18 +118,29 @@ class TestDocumentData(unittest.TestCase):
         with DocumentData(data_path, lexicon, documents) as docdata:
             for i in range(len(documents)):
                 for interval in docdata.token_intervals(i, 0, 2 ** 16):
-                    for (t, pos) in interval.tokens:
+                    for t in interval.tokens:
                         pass
                 for interval in docdata.token_intervals(i, 0, 0):
-                    for (t, pos) in interval.tokens:
+                    for t in interval.tokens:
                         pass
                 for interval in docdata.token_intervals(i, 0, 2 ** 16,
                                                         decode=True):
-                    for (t, pos) in interval.tokens:
+                    for t in interval.tokens:
                         pass
                 for interval in docdata.token_intervals(i, 0, 0, decode=True):
-                    for (t, pos) in interval.tokens:
+                    for t in interval.tokens:
                         pass
+
+
+class TestScripts(unittest.TestCase):
+
+    def test_scan(self):
+        idx_dir = os.path.join(TMP_DIR, TEST_INDEX_SUBDIR)
+        scan_main(idx_dir, os.cpu_count(), None)
+
+    def test_search(self):
+        idx_dir = os.path.join(TMP_DIR, TEST_INDEX_SUBDIR)
+        search_main(idx_dir, ['UNITED', 'STATES'], False, 3)
 
 
 if __name__ == '__main__':

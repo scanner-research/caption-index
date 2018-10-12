@@ -468,7 +468,6 @@ class DocumentData(_MemoryMappedFile):
     Array of tokens.
 
         token: datum
-        part_of_speech: byte
 
     For O(1) indexing, the Documents object contains a map from documents to
     their Time Index and Token Data offsets, and the number of tokens.
@@ -492,18 +491,17 @@ class DocumentData(_MemoryMappedFile):
         self._lexicon = lexicon
 
     def _tokens(self, offset, n, decode):
-        entry_bytes = self._bin_fmt.datum_bytes + 1
+        entry_bytes = self._bin_fmt.datum_bytes
         for i in range(n):
             token_id = self._datum_at(offset + i * entry_bytes)
-            pos_id = self._byte_at(offset + i * entry_bytes + self._bin_fmt.datum_bytes)
             if decode:
                 try:
                     token = self._lexicon[token_id].token
                 except IndexError:
                     token = Lexicon.UNKNOWN_TOKEN
-                yield (token, nlp.POSTag.decode(pos_id))
+                yield token
             else:
-                yield (token_id, pos_id)
+                yield token_id
 
     def tokens(self, doc, start_pos=None, end_pos=None, decode=False):
         """Generator over tokens in the range (end is non-inclusive)"""
@@ -527,7 +525,7 @@ class DocumentData(_MemoryMappedFile):
             return empty_generator()
 
         start_offset = (doc.token_data_offset +
-                        start_pos * (self._bin_fmt.datum_bytes + 1))
+                        start_pos * self._bin_fmt.datum_bytes)
         return self._tokens(start_offset, end_pos - start_pos, decode)
 
     def token_intervals(self, doc, start_time, end_time, decode=False):
@@ -567,7 +565,6 @@ class DocumentData(_MemoryMappedFile):
                 yield DocumentData.Interval(
                     start=start, end=end, position=position, length=length,
                     tokens=self._tokens(
-                        base_token_offset + position * (
-                            self._bin_fmt.datum_bytes + 1),
+                        base_token_offset + position * self._bin_fmt.datum_bytes,
                         length, decode
                     ))

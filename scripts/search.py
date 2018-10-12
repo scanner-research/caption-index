@@ -54,11 +54,7 @@ def main(index_dir, query, silent, context_size):
     def run_search(query):
         start_time = time.time()
         query_tokens = list(nlp.tokenize(query))
-        try:
-            result = index.search(query_tokens)
-        except Exception as e:
-            traceback.print_exc()
-            return
+        result = index.search(query_tokens)
 
         occurence_count = 0
         i = 0
@@ -69,7 +65,7 @@ def main(index_dir, query, silent, context_size):
             for j, e in enumerate(d.locations):
                 if not silent:
                     if context_size > 0:
-                        context = ' '.join(t for t, _ in docdata.tokens(
+                        context = ' '.join(docdata.tokens(
                             d.id,
                             start_pos=max(e.index - context_size, 0),
                             end_pos=e.index + context_size + len(query_tokens),
@@ -103,7 +99,10 @@ def main(index_dir, query, silent, context_size):
                     break
                 query = query.strip()
                 if len(query) > 0:
-                    run_search(query)
+                    try:
+                        run_search(query)
+                    except Exception:
+                        traceback.print_exc()
 
 
 if __name__ == '__main__':
