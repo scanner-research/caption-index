@@ -194,7 +194,7 @@ class BinaryFormat(object):
     def decode_time_interval(self, s):
         assert len(s) == self.time_interval_bytes
         start = int.from_bytes(s[:self._start_time_bytes], self._endian)
-        diff = int.from_bytes(s[self._end_time_bytes:], self._endian)
+        diff = int.from_bytes(s[self._start_time_bytes:], self._endian)
         return start, start + diff
 
     def encode_datum(self, i):
@@ -214,10 +214,6 @@ class BinaryFormat(object):
         assert isinstance(b, int)
         assert b <= 255, 'Out of range: {}'.format(b)
         return (b).to_bytes(1, self._endian) # endian arg is silly
-
-    def decode_byte(self, s):
-        assert len(s) == 1, '{} is the wrong length'.format(len(s))
-        return int.from_bytes(s, self._endian) # endian arg is silly
 
     @staticmethod
     def default():
@@ -269,7 +265,7 @@ class _MemoryMappedFile(object):
             self._f = None
 
     def _byte_at(self, i):
-        return self._bin_fmt.decode_byte(self._mmap[i])
+        return self._mmap[i]
 
     def _datum_at(self, i):
         return self._bin_fmt.decode_datum(
