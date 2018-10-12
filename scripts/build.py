@@ -20,8 +20,7 @@ from tqdm import tqdm
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)) + '/../src')
 
-import nlp
-from index import Lexicon, Documents, BinaryFormat
+from index import tokenize, Lexicon, Documents, BinaryFormat
 
 
 BINARY_FORMAT = BinaryFormat.default()
@@ -83,7 +82,7 @@ def get_doc_words(doc_path):
 
     words = Counter()
     for s in subs:
-        tokens = nlp.tokenize(s.text)
+        tokens = tokenize(s.text)
         words.update(tokens)
     return words
 
@@ -138,7 +137,7 @@ def index_single_doc(doc_path, lexicon):
             tokens = deque()
             entry_start_position = doc_position
 
-            for t in nlp.tokenize(s.text):
+            for t in tokenize(s.text):
                 token = None
                 try:
                     try:
@@ -269,7 +268,8 @@ def index_all_docs(doc_dir, doc_names, lexicon, bin_doc_path, out_dir,
                 documents[doc_id] = Documents.Document(
                     id=doc_id, name=doc_names[doc_id], length=doc_length,
                     time_index_offset=doc_time_idx_offset + global_offset,
-                    token_data_offset=doc_token_data_offset + global_offset)
+                    token_data_offset=doc_token_data_offset + global_offset,
+                    meta_data_offset=-1)
             global_offset += os.path.getsize(out_path_prefix + TMP_BIN_DOC_EXT)
 
         assert None not in documents, 'Not all documents were indexed'
@@ -558,10 +558,7 @@ def main(doc_dir, out_dir, workers, keep_cache=False, limit=None):
 
     # Resave the lexicon with offsets
     print('Storing lexicon with offsets: {}'.format(lex_path))
-    lexicon = Lexicon([
-        Lexicon.Word(w.id, w.token, w.count, jump_offsets[w.id])
-        for w in lexicon
-    ])
+    lexicon = Lexicon([w._replace(offset=jump_offsets[w.id]) for w in lexicon])
     lexicon.store(lex_path)
     assert os.path.exists(lex_path), 'Missing: {}'.format(idx_path)
 

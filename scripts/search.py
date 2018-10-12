@@ -12,8 +12,7 @@ import traceback
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)) + '/../src')
 
-import nlp
-from index import Lexicon, Documents, InvertedIndex, DocumentData
+from index import tokenize, Lexicon, Documents, InvertedIndex, DocumentData
 
 
 DEFAULT_CONTEXT = 3
@@ -53,7 +52,7 @@ def main(index_dir, query, silent, context_size):
 
     def run_search(query):
         start_time = time.time()
-        query_tokens = list(nlp.tokenize(query))
+        query_tokens = list(tokenize(query))
         result = index.search(query_tokens)
 
         occurence_count = 0

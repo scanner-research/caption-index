@@ -3,10 +3,18 @@ Indexes for srt files
 """
 
 import mmap
+import spacy
 import _pickle as pickle
+from abc import ABC, abstractmethod, abstractproperty
 from collections import namedtuple, deque
 
-import nlp
+
+MODEL = 'en'
+_TOKENIZER = spacy.load(MODEL, disable=['tagger', 'parser', 'ner'])
+
+
+def tokenize(text):
+    return (t.text for t in _TOKENIZER(text))
 
 
 class Lexicon(object):
@@ -75,7 +83,8 @@ class Documents(object):
             'name',                 # File name
             'length',               # Number of tokens in file
             'time_index_offset',    # Time index offset in binary docs file
-            'token_data_offset'     # Token data offset in binary docs file
+            'token_data_offset',    # Token data offset in binary docs file
+            'meta_data_offset'      # Offset in the metadata file
         ])
 
     def __init__(self, docs):
@@ -112,7 +121,8 @@ class Documents(object):
     def store(self, path):
         with open(path, 'wb') as f:
             pickle.dump([
-                (d.id, d.name, d.length, d.time_index_offset, d.token_data_offset)
+                (d.id, d.name, d.length, d.time_index_offset,
+                 d.token_data_offset, d.meta_data_offset)
                 for d in self._docs
             ], f)
 
@@ -210,11 +220,6 @@ class BinaryFormat(object):
         assert len(s) == self._datum_bytes, '{} is the wrong length'.format(len(s))
         return int.from_bytes(s, self._endian)
 
-    def encode_byte(self, b):
-        assert isinstance(b, int)
-        assert b <= 255, 'Out of range: {}'.format(b)
-        return (b).to_bytes(1, self._endian) # endian arg is silly
-
     @staticmethod
     def default():
         return BinaryFormat(
@@ -239,15 +244,8 @@ class _MemoryMappedFile(object):
     Base class for an object backed by a mmapped file
     """
 
-    def __init__(self, path, binary_format):
+    def __init__(self, path):
         assert isinstance(path, str)
-
-        if binary_format is not None:
-            assert isinstance(binary_format, BinaryFormat)
-            self._bin_fmt = binary_format
-        else:
-            self._bin_fmt = BinaryFormat.default()
-
         self._f = open(path, 'rb')
         self._mmap = mmap.mmap(self._f.fileno(), 0, access=mmap.ACCESS_READ)
 
@@ -267,16 +265,33 @@ class _MemoryMappedFile(object):
     def _byte_at(self, i):
         return self._mmap[i]
 
+    def _bytes_at(self, i, n):
+        return self._mmap[i:i + n]
+
+
+class _BinaryFormatFile(_MemoryMappedFile):
+    """
+    Base class for an object backed by a mmapped file
+    """
+
+    def __init__(self, path, binary_format):
+        super(_BinaryFormatFile, self).__init__(path)
+        if binary_format is not None:
+            assert isinstance(binary_format, BinaryFormat)
+            self._bin_fmt = binary_format
+        else:
+            self._bin_fmt = BinaryFormat.default()
+
     def _datum_at(self, i):
         return self._bin_fmt.decode_datum(
-            self._mmap[i:i + self._bin_fmt.datum_bytes])
+            self._bytes_at(i, self._bin_fmt.datum_bytes))
 
     def _time_int_at(self, i):
         return self._bin_fmt.decode_time_interval(
-            self._mmap[i:i + self._bin_fmt.time_interval_bytes])
+            self._bytes_at(i, self._bin_fmt.time_interval_bytes))
 
 
-class InvertedIndex(_MemoryMappedFile):
+class InvertedIndex(_BinaryFormatFile):
     """
     Interface to a binary encoded inverted index file
 
@@ -326,7 +341,7 @@ class InvertedIndex(_MemoryMappedFile):
 
     def search(self, text):
         if isinstance(text, str):
-            tokens = list(nlp.tokenize(text.strip()))
+            tokens = list(tokenize(text.strip()))
             if len(tokens) == 0:
                 raise ValueError('No words in input')
             for t in tokens:
@@ -452,7 +467,7 @@ class InvertedIndex(_MemoryMappedFile):
             pass
 
 
-class DocumentData(_MemoryMappedFile):
+class DocumentData(_BinaryFormatFile):
     """
     Interface to a binary encoded document data file
 
@@ -568,3 +583,67 @@ class DocumentData(_MemoryMappedFile):
                         base_token_offset + position * self._bin_fmt.datum_bytes,
                         length, decode
                     ))
+
+
+class MetadataFormat(ABC):
+
+    @abstractmethod
+    def decode(self, s):
+        """Return decoded metadata"""
+        pass
+
+    @abstractproperty
+    def size(self):
+        """Number of bytes of metadata"""
+        pass
+
+
+class MetadataIndex(_MemoryMappedFile):
+    """
+    Interface to binary encoded metadata files for efficient iteration
+    """
+
+    def __init__(self, path, documents, metadata_format):
+        super(MetadataIndex, self).__init__(path)
+
+        assert isinstance(path, str)
+        assert isinstance(metadata_format, MetadataFormat)
+        assert metadata_format.size > 0, \
+            'Invalid metadata size: {}'.format(metadata_format.size)
+        self._documents = documents
+        self._meta_fmt = metadata_format
+
+    def _metadata(self, offset, n):
+        entry_size = self._meta_fmt.size
+        for i in range(n):
+            if entry_size == 1:
+                data = self._byte_at(offset + i)
+            else:
+                data = self._bytes_at(offset + i * entry_size)
+            yield self._meta_fmt.decode(data)
+
+    def metadata(self, doc, start_pos=None, end_pos=None):
+        """Generator over metadata (end is non-inclusive)"""
+        if isinstance(doc, Documents.Document):
+            doc = self._documents[doc.id]
+        else:
+            doc = self._documents[doc]
+
+        assert doc.length >= 0, \
+            'Invalid document length: {}'.format(doc.length)
+        assert doc.meta_data_offset >= 0, \
+            'Invalid metadata offset: {}'.format(doc.meta_data_offset)
+
+        if end_pos is None or end_pos > doc.length:
+            end_pos = doc.length
+
+        if start_pos is None:
+            start_pos = 0
+        elif start_pos < 0:
+            raise ValueError('Start position cannot be negative: {}'.format(
+                             start_pos))
+        elif start_pos >= end_pos:
+            return empty_generator()
+
+        start_offset = doc.meta_data_offset + start_pos * self._meta_fmt.size
+        return self._metadata(start_offset, end_pos - start_pos)

@@ -10,10 +10,12 @@ from subprocess import check_call
 sys.path.append(os.path.dirname(os.path.abspath(__file__)) + '/../src')
 sys.path.append(os.path.dirname(os.path.abspath(__file__)) + '/../scripts')
 
-from index import BinaryFormat, Lexicon, Documents, InvertedIndex, DocumentData
-from build import main as build_main
-from scan import main as scan_main
-from search import main as search_main
+import build
+import scan
+import search
+import build_metadata
+import build_metadata
+from index import *
 
 
 TMP_DIR = None
@@ -31,7 +33,7 @@ def build_test_index(tmp_dir):
     os.makedirs(subs_dir)
     check_call(['tar', '-xzf', TEST_DATA_PATH, '-C', subs_dir])
 
-    build_main(subs_dir, idx_dir, 1)
+    build.main(subs_dir, idx_dir, 1)
     assert os.path.isdir(idx_dir)
 
 
@@ -42,6 +44,14 @@ def get_docs_and_lex(idx_dir):
     documents = Documents.load(doc_path)
     lexicon = Lexicon.load(lex_path)
     return documents, lexicon
+
+
+class TestTokenize(unittest.TestCase):
+
+    def test_tokenize(self):
+        text = 'I\'m a string! This is is a tokenizer test.'
+        tokens = list(tokenize(text))
+        self.assertTrue(isinstance(tokens[0], str))
 
 
 class TestBinaryFormat(unittest.TestCase):
@@ -65,11 +75,6 @@ class TestBinaryFormat(unittest.TestCase):
         self.assertEqual((76543210, 76543210 + bf.max_time_interval),
                          bf.decode_time_interval(bf.encode_time_interval(
                             76543210, 76543210 + bf.max_time_interval)))
-
-    def test_byte(self):
-        bf = BinaryFormat.default()
-        for i in range(256):
-            self.assertEqual(i, int.from_bytes(bf.encode_byte(i), bf._endian))
 
 
 class TestInvertedIndex(unittest.TestCase):
@@ -136,11 +141,26 @@ class TestScripts(unittest.TestCase):
 
     def test_scan(self):
         idx_dir = os.path.join(TMP_DIR, TEST_INDEX_SUBDIR)
-        scan_main(idx_dir, os.cpu_count(), None)
+        scan.main(idx_dir, os.cpu_count(), None)
 
     def test_search(self):
         idx_dir = os.path.join(TMP_DIR, TEST_INDEX_SUBDIR)
-        search_main(idx_dir, ['UNITED', 'STATES'], False, 3)
+        search.main(idx_dir, ['UNITED', 'STATES'], False, 3)
+
+    def test_build_metadata(self):
+        idx_dir = os.path.join(TMP_DIR, TEST_INDEX_SUBDIR)
+        meta_path = os.path.join(idx_dir, 'meta.bin')
+
+        build_metadata.main(idx_dir, True)
+
+        documents, lexicon = get_docs_and_lex(idx_dir)
+        with MetadataIndex(
+                meta_path, documents,
+                build_metadata.NLPTagFormat()) as metadata:
+            for d in documents:
+                self.assertTrue(d.meta_data_offset >= 0)
+                for tag in metadata.metadata(d):
+                    self.assertTrue(isinstance(tag, str))
 
 
 if __name__ == '__main__':
