@@ -2,13 +2,10 @@
 Indexes for srt files
 """
 
-import nltk
 import mmap
 from collections import namedtuple, deque
 
-
-def tokenize(s):
-    return nltk.word_tokenize(s)
+import nlp
 
 
 class Lexicon(object):
@@ -221,8 +218,17 @@ class BinaryFormat(object):
         return (i).to_bytes(self._datum_bytes, self._endian)
 
     def decode_datum(self, s):
-        assert len(s) == self._datum_bytes, '{} is too short'.format(len(s))
+        assert len(s) == self._datum_bytes, '{} is the wrong length'.format(len(s))
         return int.from_bytes(s, self._endian)
+
+    def encode_byte(self, b):
+        assert isinstance(b, int)
+        assert b <= 255, 'Out of range: {}'.format(b)
+        return (b).to_bytes(1, self._endian) # endian arg is silly
+
+    def decode_byte(self, s):
+        assert len(s) == 1, '{} is the wrong length'.format(len(s))
+        return int.from_bytes(s, self._endian) # endian arg is silly
 
     @staticmethod
     def default():
@@ -332,7 +338,7 @@ class InvertedIndex(_MemoryMappedFile):
 
     def search(self, text):
         if isinstance(text, str):
-            tokens = tokenize(text.strip())
+            tokens = nlp.tokenize(text.strip())
             if len(tokens) == 0:
                 raise ValueError('No words in input')
             for t in tokens:
@@ -468,11 +474,10 @@ class DocumentData(_MemoryMappedFile):
         position: datum
 
     [Token Data]
-    Array of token_ids.
+    Array of tokens.
 
-        token1: datum
-        token2: datum
-        ...
+        token: datum
+        part_of_speech: byte
 
     For O(1) indexing, the Documents object contains a map from documents to
     their Time Index and Token Data offsets, and the number of tokens.
@@ -496,16 +501,18 @@ class DocumentData(_MemoryMappedFile):
         self._lexicon = lexicon
 
     def _tokens(self, offset, n, decode):
+        entry_bytes = self._bin_fmt.datum_bytes + 1
         for i in range(n):
-            token_id = self._datum_at(offset + i * self._bin_fmt.datum_bytes)
+            token_id = self._datum_at(offset + i * entry_bytes)
+            pos_id = self._byte_at(offset + i * entry_bytes + self._bin_fmt.datum_bytes)
             if decode:
                 try:
                     token = self._lexicon[token_id].token
                 except IndexError:
                     token = Lexicon.UNKNOWN_TOKEN
-                yield token
+                yield (token, nlp.POSTag.decode(pos_id))
             else:
-                yield token_id
+                yield (token_id, pos_id)
 
     def tokens(self, doc, start_pos=None, end_pos=None, decode=False):
         """Generator over tokens in the range (end is non-inclusive)"""

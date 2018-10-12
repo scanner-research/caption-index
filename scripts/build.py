@@ -19,7 +19,9 @@ from tqdm import tqdm
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)) + '/../src')
 
-from index import tokenize, Lexicon, Documents, BinaryFormat
+import nlp
+from index import Lexicon, Documents, BinaryFormat
+
 
 
 BINARY_FORMAT = BinaryFormat.default()
@@ -81,7 +83,7 @@ def get_doc_words(doc_path):
 
     words = Counter()
     for s in subs:
-        tokens = tokenize(s.text)
+        tokens = nlp.tokenize(s.text)
         words.update(tokens)
     return words
 
@@ -125,7 +127,8 @@ def index_single_doc(doc_path, lexicon):
         for s in subs:
             start, end = s.start.ordinal, s.end.ordinal
             if start > end:
-                print('Warning: start time > end time ({} > {})'.format(start, end))
+                print('Warning: start time > end time ({} > {})'.format(
+                      start, end))
                 end = start
             if end - start > BINARY_FORMAT.max_time_interval:
                 print('Warning: end - start > {}ms'.format(
@@ -135,19 +138,22 @@ def index_single_doc(doc_path, lexicon):
             tokens = deque()
             entry_start_position = doc_position
 
-            for t in tokenize(s.text):
+            for t in nlp.tokenize_and_tag(s.text):
                 token = None
                 try:
                     try:
-                        token = lexicon[t]
+                        token = lexicon[t.text]
                     except KeyError:
                         print('Unknown token: {}'.format(t))
+                        continue
                     doc_inv_index[token.id].append((doc_position, start, end))
                 finally:
                     doc_position += 1
-                    tokens.append(
+                    tokens.append((
                         BINARY_FORMAT.max_datum_value
-                        if token is None else token.id)
+                        if token is None else token.id,
+                        nlp.POSTag.encode(t.tag_)
+                    ))
 
             doc_lines.append((entry_start_position, start, end, tokens))
 
@@ -182,25 +188,25 @@ def write_inv_index(inv_index, out_path):
                     f.write(BINARY_FORMAT.encode_time_interval(start, end))
 
 
-def encode_doc_batch(batch_doc_lines, out_path):
-    """Returns [(time_idx_offset, token_data_offset, doc_len)]"""
-    batch_doc_offsets = deque()
-    with open(out_path, 'wb') as f:
-        for doc_id, doc_lines in batch_doc_lines:
-            doc_time_idx_start = f.tell()
-            for position, start, end, _ in doc_lines:
-                f.write(BINARY_FORMAT.encode_time_interval(start, end))
-                f.write(BINARY_FORMAT.encode_datum(position))
+def write_doc_data(doc_lines, out_path):
+    """
+    Appends to the document data file.
+    Returns (time_idx_offset, token_data_offset, doc_len)
+    """
+    with open(out_path, 'ab') as f:
+        doc_time_idx_start = f.tell()
+        for position, start, end, _ in doc_lines:
+            f.write(BINARY_FORMAT.encode_time_interval(start, end))
+            f.write(BINARY_FORMAT.encode_datum(position))
 
-            doc_len = 0
-            doc_token_data_start = f.tell()
-            for _, _, _, tokens in doc_lines:
-                for t in tokens:
-                    f.write(BINARY_FORMAT.encode_datum(t))
-                doc_len += len(tokens)
-            batch_doc_offsets.append(
-                (doc_time_idx_start, doc_token_data_start, doc_len))
-    return batch_doc_offsets
+        doc_len = 0
+        doc_token_data_start = f.tell()
+        for _, _, _, tokens in doc_lines:
+            for t, pos in tokens:
+                f.write(BINARY_FORMAT.encode_datum(t))
+                f.write(BINARY_FORMAT.encode_byte(pos))
+            doc_len += len(tokens)
+    return doc_time_idx_start, doc_token_data_start, doc_len
 
 
 def index_batch(doc_batch, out_path_prefix):
@@ -211,19 +217,17 @@ def index_batch(doc_batch, out_path_prefix):
     assert isinstance(lexicon, Lexicon)
 
     batch_inv_index = defaultdict(deque)    # token_id -> [(doc, [postings])]
-    batch_doc_lines = deque()
+    batch_doc_offsets = deque()
     for doc_id, doc_path in doc_batch:
         doc_lines, doc_inv_index = index_single_doc(doc_path, lexicon)
+
+        batch_doc_offsets.append(
+            write_doc_data(doc_lines, out_path_prefix + TMP_BIN_DOC_EXT))
 
         for token_id, postings in doc_inv_index.items():
             batch_inv_index[token_id].append((doc_id, postings))
 
-        batch_doc_lines.append((doc_id, doc_lines))
-
     write_inv_index(batch_inv_index, out_path_prefix + TMP_INV_IDX_EXT)
-    batch_doc_offsets = encode_doc_batch(batch_doc_lines,
-                                         out_path_prefix + TMP_BIN_DOC_EXT)
-
     return batch_doc_offsets
 
 

@@ -68,11 +68,12 @@ def main(index_dir, query, silent, context_size):
             for j, e in enumerate(d.locations):
                 if not silent:
                     if context_size > 0:
-                        context = ' '.join(docdata.tokens(
+                        context = ' '.join(t for t, _ in docdata.tokens(
                             d.id,
                             start_pos=max(e.index - context_size, 0),
                             end_pos=e.index + context_size + len(query_tokens),
-                            decode=True))
+                            decode=True
+                        ))
                     else:
                         context = ' '.join(query_tokens)
 
