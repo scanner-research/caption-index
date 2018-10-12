@@ -1,11 +1,18 @@
 #!/usr/bin/env python3
 
+"""
+Search for phrases across all of the documents
+"""
+
 import argparse
 import os
+import sys
 import time
 import traceback
 
-from util.index import Lexicon, Documents, InvertedIndex, DocumentData, tokenize
+sys.path.append(os.path.dirname(os.path.abspath(__file__)) + '/../src')
+
+from index import Lexicon, Documents, InvertedIndex, DocumentData, tokenize
 
 
 DEFAULT_CONTEXT = 3
@@ -16,7 +23,7 @@ def get_args():
     parser.add_argument('index_dir', type=str,
                         help='Directory containing index files')
     parser.add_argument('-s', dest='silent', action='store_true',
-                        help='Silent mode')
+                        help='Silent mode for benchmarking')
     parser.add_argument('-c', dest='context_size', type=int,
                         default=DEFAULT_CONTEXT,
                         help='Context window width (default: {})'.format(

@@ -1,18 +1,25 @@
 #!/usr/bin/env python3
 
+"""
+Index a directory of transcript files
+"""
+
 import argparse
 import heapq
 import math
 import pysrt
 import os
 import shutil
+import sys
 from collections import defaultdict, deque, namedtuple, Counter
 from multiprocessing import Pool
 from subprocess import check_call
 from threading import Lock
 from tqdm import tqdm
 
-from util.index import tokenize, Lexicon, Documents, BinaryFormat
+sys.path.append(os.path.dirname(os.path.abspath(__file__)) + '/../src')
+
+from index import tokenize, Lexicon, Documents, BinaryFormat
 
 
 BINARY_FORMAT = BinaryFormat.default()
@@ -85,8 +92,8 @@ def get_words(doc_dir, doc_names):
 
     words = Counter()
     words_lock = Lock()
-    with tqdm(total=len(doc_names)) as pbar, Pool(processes=N_WORKERS) as pool:
-        pbar.set_description('Building lexicon')
+    with tqdm(total=len(doc_names), desc='Building lexicon') as pbar, \
+            Pool(processes=N_WORKERS) as pool:
 
         def collect(result):
             with words_lock:
@@ -230,9 +237,9 @@ def index_all_docs(doc_dir, doc_names, lexicon, bin_doc_path, out_dir,
     global WORKER_LEXICON
     WORKER_LEXICON = lexicon
 
-    with tqdm(total=len(doc_names)) as pbar, Pool(processes=N_WORKERS) as pool:
+    with tqdm(total=len(doc_names), desc='Building indexes') as pbar, \
+            Pool(processes=N_WORKERS) as pool:
         async_results = deque()
-        pbar.set_description('Building indexes')
 
         def progress(doc_offsets):
             pbar.update(len(doc_offsets))
@@ -443,13 +450,12 @@ def parallel_merge_inv_indexes(idx_dir, lexicon, out_path, merge_dir):
             for x in os.listdir(idx_dir) if x.endswith(TMP_INV_IDX_EXT)
         ]
 
-        with tqdm(total=N_WORKERS) as pbar:
-            pbar.set_description('Merging indexes')
+        with tqdm(total=N_WORKERS + 1, desc='Merging indexes') as pbar:
 
             def progress(ignored):
                 pbar.update(1)
 
-            with Pool(processes=N_WORKERS + 1) as pool:
+            with Pool(processes=N_WORKERS) as pool:
                 tokens_per_worker = math.ceil(len(lexicon) / N_WORKERS)
                 new_idx_paths = []
                 async_results = deque()

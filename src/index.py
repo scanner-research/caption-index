@@ -1,5 +1,5 @@
 """
-Indexes for srt files.
+Indexes for srt files
 """
 
 import nltk
@@ -21,7 +21,7 @@ class Lexicon(object):
             'id',       # Token id
             'token',    # String representation
             'count',    # Number of occurrences
-            'offset'    # Offset into index file
+            'offset'    # Offset into inverted index file
         ])
 
     def __init__(self, words):
@@ -77,10 +77,10 @@ class Documents(object):
     Document = namedtuple(
         'Document', [
             'id',
-            'name',
-            'length',
-            'time_index_offset',
-            'token_data_offset'
+            'name',                 # File name
+            'length',               # Number of tokens in file
+            'time_index_offset',    # Time index offset in binary docs file
+            'token_data_offset'     # Token data offset in binary docs file
         ])
 
     def __init__(self, docs):
@@ -150,9 +150,9 @@ class BinaryFormat(object):
     Config = namedtuple(
         'Config', [
             'endian',
-            'start_time_bytes',
-            'end_time_bytes',
-            'datum_bytes',
+            'start_time_bytes',     # Number of bytes to encode start times
+            'end_time_bytes',       # Number of bytes to encode end - start
+            'datum_bytes',          # Number of bytes to encode other data
         ])
 
     def __init__(self, config):
@@ -228,7 +228,9 @@ class BinaryFormat(object):
     def default():
         return BinaryFormat(
             BinaryFormat.Config(
-                endian='little', start_time_bytes=4, end_time_bytes=2,
+                endian='little',
+                start_time_bytes=4,
+                end_time_bytes=2,
                 datum_bytes=3))
 
 

@@ -1,13 +1,20 @@
 #!/usr/bin/env python3
 
+"""
+Count all of the tokens in all of the documents
+"""
+
 import argparse
 import os
+import sys
 import time
 from tqdm import tqdm
 from collections import deque
 from multiprocessing import Pool
 
-from util.index import Lexicon, Documents, DocumentData
+sys.path.append(os.path.dirname(os.path.abspath(__file__)) + '/../src')
+
+from index import Lexicon, Documents, DocumentData
 
 
 DEFAULT_WORKERS = os.cpu_count()
