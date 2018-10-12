@@ -3,6 +3,7 @@ Indexes for srt files
 """
 
 import mmap
+import _pickle as pickle
 from collections import namedtuple, deque
 
 import nlp
@@ -53,18 +54,12 @@ class Lexicon(object):
 
     def store(self, path):
         with open(path, 'w') as f:
-            for w in self._words:
-                f.write('{}\t{}\t{}\n'.format(w.token, w.count, w.offset))
+            pickle.dump(self._words, f)
 
     @staticmethod
     def load(path):
-        words = []
         with open(path, 'r') as f:
-            for i, line in enumerate(f):
-                token, count, offset = line.strip().split('\t')
-                count = int(count)
-                offset = int(offset)
-                words.append(Lexicon.Word(i, token, count, offset))
+            words = pickle.load(f)
         return Lexicon(words)
 
 
@@ -113,26 +108,13 @@ class Documents(object):
 
     def store(self, path):
         with open(path, 'w') as f:
-            for d in self._docs:
-                f.write('{}\t{}\t{}\t{}\n'.format(
-                    d.name, d.length, d.time_index_offset, d.token_data_offset
-                ))
+            pickle.dump(self._docs, f)
 
     @staticmethod
     def load(path):
         with open(path, 'r') as f:
-            documents = []
-            for i, line in enumerate(f):
-                name, length, time_index_offset, token_data_offset = \
-                    line.strip().split('\t')
-                length = int(length)
-                time_index_offset = int(time_index_offset)
-                token_data_offset = int(token_data_offset)
-                documents.append(Documents.Document(
-                    id=i, name=name, length=length,
-                    time_index_offset=time_index_offset,
-                    token_data_offset=token_data_offset))
-            return Documents(documents)
+            documents = pickle.load(f)
+        return Documents(documents)
 
 
 class BinaryFormat(object):
