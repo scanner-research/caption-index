@@ -12,7 +12,8 @@ import traceback
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)) + '/../src')
 
-from index import Lexicon, Documents, InvertedIndex, DocumentData, tokenize
+import nlp
+from index import Lexicon, Documents, InvertedIndex, DocumentData
 
 
 DEFAULT_CONTEXT = 3
@@ -52,7 +53,7 @@ def main(index_dir, query, silent, context_size):
 
     def run_search(query):
         start_time = time.time()
-        query_tokens = tokenize(query)
+        query_tokens = list(nlp.tokenize(query))
         try:
             result = index.search(query_tokens)
         except Exception as e:

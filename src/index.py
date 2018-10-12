@@ -326,7 +326,7 @@ class InvertedIndex(_MemoryMappedFile):
 
     def search(self, text):
         if isinstance(text, str):
-            tokens = nlp.tokenize(text.strip())
+            tokens = list(nlp.tokenize(text.strip()))
             if len(tokens) == 0:
                 raise ValueError('No words in input')
             for t in tokens:
@@ -524,7 +524,7 @@ class DocumentData(_MemoryMappedFile):
             return empty_generator()
 
         start_offset = (doc.token_data_offset +
-                        start_pos * self._bin_fmt.datum_bytes)
+                        start_pos * (self._bin_fmt.datum_bytes + 1))
         return self._tokens(start_offset, end_pos - start_pos, decode)
 
     def token_intervals(self, doc, start_time, end_time, decode=False):
@@ -540,8 +540,10 @@ class DocumentData(_MemoryMappedFile):
 
         base_idx_offset = doc.time_index_offset
         base_token_offset = doc.token_data_offset
-        num_intervals = (doc.token_data_offset - doc.time_index_offset) / (
-            self._bin_fmt.time_interval_bytes + self._bin_fmt.datum_bytes)
+        num_intervals = int(
+            (doc.token_data_offset - doc.time_index_offset) /
+            (self._bin_fmt.time_interval_bytes + self._bin_fmt.datum_bytes))
+
         for i in range(num_intervals):
             curr_offset = base_idx_offset + i * (
                 self._bin_fmt.time_interval_bytes + self._bin_fmt.datum_bytes)
@@ -562,7 +564,7 @@ class DocumentData(_MemoryMappedFile):
                 yield DocumentData.Interval(
                     start=start, end=end, position=position, length=length,
                     tokens=self._tokens(
-                        (base_token_offset
-                            + position * self._bin_fmt.datum_bytes),
+                        base_token_offset + position * (
+                            self._bin_fmt.datum_bytes + 1),
                         length, decode
                     ))
