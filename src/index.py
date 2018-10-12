@@ -279,6 +279,9 @@ class _MemoryMappedFile(object):
             self._f.close()
             self._f = None
 
+    def _byte_at(self, i):
+        return self._bin_fmt.decode_byte(self._mmap[i])
+
     def _datum_at(self, i):
         return self._bin_fmt.decode_datum(
             self._mmap[i:i + self._bin_fmt.datum_bytes])
