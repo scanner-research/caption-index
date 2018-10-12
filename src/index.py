@@ -53,13 +53,16 @@ class Lexicon(object):
         return len(self._words)
 
     def store(self, path):
-        with open(path, 'w') as f:
-            pickle.dump(self._words, f)
+        with open(path, 'wb') as f:
+            pickle.dump([
+                (w.id, w.token, w.count, w.offset)
+                for w in self._words
+            ], f)
 
     @staticmethod
     def load(path):
-        with open(path, 'r') as f:
-            words = pickle.load(f)
+        with open(path, 'rb') as f:
+            words = [Lexicon.Word(*x) for x in pickle.load(f)]
         return Lexicon(words)
 
 
@@ -107,13 +110,16 @@ class Documents(object):
         return len(self._docs)
 
     def store(self, path):
-        with open(path, 'w') as f:
-            pickle.dump(self._docs, f)
+        with open(path, 'wb') as f:
+            pickle.dump([
+                (d.id, d.name, d.length, d.time_index_offset, d.token_data_offset)
+                for d in self._docs
+            ], f)
 
     @staticmethod
     def load(path):
-        with open(path, 'r') as f:
-            documents = pickle.load(f)
+        with open(path, 'rb') as f:
+            documents = [Documents.Document(*x) for x in pickle.load(f)]
         return Documents(documents)
 
 
