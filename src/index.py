@@ -413,40 +413,43 @@ class InvertedIndex(_MemoryMappedFile):
     @staticmethod
     def _merge_results(a, b, gap):
         """Generator for merged results"""
-        a_head = next(a.documents)
-        b_head = next(b.documents)
-        while True:
-            if a_head.id == b_head.id:
-                # Merge within a document
-                locations = None
-                try:
-                    a_ent = next(a_head.locations)
-                    b_ent = next(b_head.locations)
-                    while True:
-                        if a_ent.index + gap == b_ent.index:
-                            if locations is None:
-                                locations = deque()
-                            locations.append(InvertedIndex.LocationResult(
-                                a_ent.index, a_ent.start, b_ent.end))
-                            a_ent = next(a_head.locations)
-                            b_ent = next(b_head.locations)
-                        elif a_ent.index + gap < b_ent.index:
-                            a_ent = next(a_head.locations)
-                        else:
-                            b_ent = next(b_head.locations)
-                except StopIteration:
-                    pass
-                finally:
-                    if locations is not None:
-                        yield InvertedIndex.DocumentResult(
-                            id=a_head.id, count=len(locations),
-                            locations=iter(locations))
-                a_head = next(a.documents)
-                b_head = next(b.documents)
-            elif a_head.id < b_head.id:
-                a_head = next(a.documents)
-            else:
-                b_head = next(b.documents)
+        try:
+            a_head = next(a.documents)
+            b_head = next(b.documents)
+            while True:
+                if a_head.id == b_head.id:
+                    # Merge within a document
+                    locations = None
+                    try:
+                        a_ent = next(a_head.locations)
+                        b_ent = next(b_head.locations)
+                        while True:
+                            if a_ent.index + gap == b_ent.index:
+                                if locations is None:
+                                    locations = deque()
+                                locations.append(InvertedIndex.LocationResult(
+                                    a_ent.index, a_ent.start, b_ent.end))
+                                a_ent = next(a_head.locations)
+                                b_ent = next(b_head.locations)
+                            elif a_ent.index + gap < b_ent.index:
+                                a_ent = next(a_head.locations)
+                            else:
+                                b_ent = next(b_head.locations)
+                    except StopIteration:
+                        pass
+                    finally:
+                        if locations is not None:
+                            yield InvertedIndex.DocumentResult(
+                                id=a_head.id, count=len(locations),
+                                locations=iter(locations))
+                    a_head = next(a.documents)
+                    b_head = next(b.documents)
+                elif a_head.id < b_head.id:
+                    a_head = next(a.documents)
+                else:
+                    b_head = next(b.documents)
+        except StopIteration:
+            pass
 
 
 class DocumentData(_MemoryMappedFile):
@@ -548,7 +551,7 @@ class DocumentData(_MemoryMappedFile):
             curr_offset = base_idx_offset + i * (
                 self._bin_fmt.time_interval_bytes + self._bin_fmt.datum_bytes)
             start, end = self._time_int_at(curr_offset)
-            curr_offset + self._bin_fmt.time_interval_bytes
+            curr_offset += self._bin_fmt.time_interval_bytes
             position = self._datum_at(curr_offset)
             curr_offset += self._bin_fmt.datum_bytes
 
