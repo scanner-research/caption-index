@@ -24,6 +24,7 @@ from index import tokenize, Lexicon, Documents, BinaryFormat
 
 
 BINARY_FORMAT = BinaryFormat.default()
+MAX_WORD_LEN = 20
 
 
 DEFAULT_OUT_DIR = 'out'
@@ -41,6 +42,9 @@ N_WORKERS = None
 WORKER_LEXICON = None
 
 
+DEFAULT_SOURCE_FILE_EXT = 'srt'
+
+
 def get_args():
     p = argparse.ArgumentParser()
     p.add_argument('doc_dir', type=str,
@@ -51,6 +55,10 @@ def get_args():
     p.add_argument('-j', dest='workers', type=int, default=DEFAULT_WORKERS,
                    help='Number of CPU cores to use. Default: {}'.format(
                         DEFAULT_WORKERS))
+    p.add_argument('--ext', dest='extension',
+                   default=DEFAULT_SOURCE_FILE_EXT,
+                   help='Subtitle file extension. Default: {}'.format(
+                        DEFAULT_SOURCE_FILE_EXT))
     p.add_argument('--keep-cache', dest='keep_cache', action='store_true',
                    help='Cache intermediate index chunks')
     p.add_argument('--limit', dest='limit', type=int,
@@ -58,8 +66,8 @@ def get_args():
     return p.parse_args()
 
 
-def list_subs(dir):
-    return [f for f in os.listdir(dir) if f.endswith('.srt')]
+def list_subs(dir, ext):
+    return [f for f in os.listdir(dir) if f.endswith(ext)]
 
 
 def load_srt(doc_path):
@@ -74,16 +82,16 @@ def load_srt(doc_path):
 
 
 def get_doc_words(doc_path):
+    words = Counter()
     try:
         subs = load_srt(doc_path)
     except Exception as e:
         print(e)
-        return set()
+        return words
 
-    words = Counter()
     for s in subs:
         tokens = tokenize(s.text)
-        words.update(tokens)
+        words.update(t for t in tokens if len(t) <= MAX_WORD_LEN)
     return words
 
 
@@ -500,12 +508,14 @@ def parallel_merge_inv_indexes(idx_dir, lexicon, out_path, merge_dir):
         shutil.rmtree(merge_dir, True)
 
 
-def main(doc_dir, out_dir, workers, keep_cache=False, limit=None):
+def main(doc_dir, out_dir, workers,
+         extension=DEFAULT_SOURCE_FILE_EXT,
+         keep_cache=False, limit=None):
     global N_WORKERS
     N_WORKERS = workers
 
     # Load document names
-    doc_names = list(sorted(list_subs(doc_dir)))
+    doc_names = list(sorted(list_subs(doc_dir, extension)))
     if limit is not None:
         doc_names = doc_names[:limit]
 
