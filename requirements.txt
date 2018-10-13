@@ -1,3 +1,4 @@
+msgpack
 pysrt
 spacy
 tqdm

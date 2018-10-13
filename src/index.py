@@ -3,8 +3,8 @@ Indexes for srt files
 """
 
 import mmap
+import msgpack
 import spacy
-import _pickle as pickle
 from abc import ABC, abstractmethod, abstractproperty
 from collections import namedtuple, deque
 
@@ -33,9 +33,11 @@ class Lexicon(object):
     def __init__(self, words):
         """List of words, where w.id is the index in the list"""
         assert isinstance(words, list)
-        assert all(i == w.id for i, w in enumerate(words))
         self._words = words
-        self._inverse = {w.token: w for i, w in enumerate(self._words)}
+        self._inverse = {}
+        for i, w in enumerate(words):
+            assert w.id == i
+            self._inverse[w.token] = w
 
     def __iter__(self):
         # Iterate lexicon in id order
@@ -61,16 +63,23 @@ class Lexicon(object):
         return len(self._words)
 
     def store(self, path):
+        prev_w = None
+        for w in self._words:
+            if prev_w:
+                assert w.id > prev_w.id, 'Bad lexicon, not sorted by id'
+                assert w.token > prev_w.token, 'Bad lexicon, not sorted by token'
+            prev_w = w
+
         with open(path, 'wb') as f:
-            pickle.dump([
+            msgpack.dump([
                 (w.id, w.token, w.count, w.offset)
                 for w in self._words
-            ], f)
+            ], f, use_bin_type=True)
 
     @staticmethod
     def load(path):
         with open(path, 'rb') as f:
-            words = [Lexicon.Word(*x) for x in pickle.load(f)]
+            words = [Lexicon.Word(*x) for x in msgpack.load(f, raw=False)]
         return Lexicon(words)
 
 
