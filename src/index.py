@@ -119,17 +119,31 @@ class Documents(object):
         return len(self._docs)
 
     def store(self, path):
-        with open(path, 'wb') as f:
-            pickle.dump([
-                (d.id, d.name, d.length, d.time_index_offset,
-                 d.token_data_offset, d.meta_data_offset)
-                for d in self._docs
-            ], f)
+        with open(path, 'w') as f:
+            for d in self._docs:
+                f.write('\t'.join([
+                    d.name,
+                    str(d.length),
+                    str(d.time_index_offset),
+                    str(d.token_data_offset),
+                    str(d.meta_data_offset)
+                ]))
+                f.write('\n')
 
     @staticmethod
     def load(path):
-        with open(path, 'rb') as f:
-            documents = [Documents.Document(*x) for x in pickle.load(f)]
+        documents = []
+        with open(path, 'r') as f:
+            for i, line in enumerate(f):
+                name, length, ti_ofs, td_ofs, md_ofs = line.split('\t', 4)
+                documents.append(Documents.Document(
+                    id=i,
+                    name=name,
+                    length=int(length),
+                    time_index_offset=int(ti_ofs),
+                    token_data_offset=int(td_ofs),
+                    meta_data_offset=int(md_ofs)
+                ))
         return Documents(documents)
 
 
