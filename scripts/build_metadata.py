@@ -39,7 +39,8 @@ POS_TAGS = [
     '``'
 ]
 POS_TAGS_MAP = {t: i for i, t in enumerate(POS_TAGS)}
-POS_UNKNOWN_ID = POS_TAGS_MAP['XX']
+POS_UNKNOWN_TAG = 'XX'
+POS_UNKNOWN_ID = POS_TAGS_MAP[POS_UNKNOWN_TAG]
 
 
 class POSTag(object):
@@ -74,7 +75,7 @@ def write_doc_metadata(d, tokens, out_file):
         except Exception:
             traceback.print_exc()
             print('Failed to generate tags: {}'.format(d.name))
-            tags = [POS_UNKNOWN_ID] * len(tokens)
+            tags = [POS_UNKNOWN_TAG] * len(tokens)
         out_file.write(bytes(POSTag.encode(t) for t in tags))
 
 
