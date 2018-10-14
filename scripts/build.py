@@ -402,7 +402,8 @@ def merge_inv_indexes(idx_paths, out_path, min_token, max_token):
     for path in idx_paths:
         p = MergeIndexParser(path, min_token, max_token - 1)
         if p.token is not None:
-            heapq.heappush(token_parsers_pq, p)
+            token_parsers_pq.append(p)
+    heapq.heapify(token_parsers_pq)
 
     jump_offsets = [-1] * len(lexicon)
     with open(out_path, 'wb') as f:
@@ -420,8 +421,9 @@ def merge_inv_indexes(idx_paths, out_path, min_token, max_token):
                     break
                 p = heapq.heappop(token_parsers_pq)
                 doc_count += p.ndocs
-                heapq.heappush(doc_parsers_pq, p)
+                doc_parsers_pq.append(p)
             assert len(doc_parsers_pq) >= 1
+            heapq.heapify(doc_parsers_pq)
 
             f.write(BINARY_FORMAT.encode_datum(token_id))   # Token id
             f.write(BINARY_FORMAT.encode_datum(doc_count))  # Num docs

@@ -257,11 +257,6 @@ def millis_to_seconds(t):
     return t / 1000
 
 
-def empty_generator():
-    return
-    yield
-
-
 class _MemoryMappedFile(object):
     """
     Base class for an object backed by a mmapped file
@@ -426,7 +421,7 @@ class InvertedIndex(_BinaryFormatFile):
             word = self._lexicon[word]
 
         if word.offset < 0:
-            return InvertedIndex.Result(count=0, documents=empty_generator())
+            return InvertedIndex.Result(count=0, documents=iter(()))
         assert word.offset < self._mmap.size(), \
             'Offset exceeds file length: {} > {}'.format(
             word.offset, self._mmap.size())
@@ -560,7 +555,7 @@ class DocumentData(_BinaryFormatFile):
             raise ValueError('Start position cannot be negative: {}'.format(
                              start_pos))
         elif start_pos >= end_pos:
-            return empty_generator()
+            return iter(())
 
         start_offset = (doc.token_data_offset +
                         start_pos * self._bin_fmt.datum_bytes)
@@ -666,7 +661,7 @@ class MetadataIndex(_MemoryMappedFile):
             raise ValueError('Start position cannot be negative: {}'.format(
                              start_pos))
         elif start_pos >= end_pos:
-            return empty_generator()
+            return iter(())
 
         start_offset = doc.meta_data_offset + start_pos * self._meta_fmt.size
         return self._metadata(start_offset, end_pos - start_pos)

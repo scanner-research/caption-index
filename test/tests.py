@@ -15,7 +15,8 @@ import scan
 import search
 import build_metadata
 import build_metadata
-from index import *
+import index
+import utils
 
 
 TMP_DIR = None
@@ -41,8 +42,8 @@ def get_docs_and_lex(idx_dir):
     doc_path = os.path.join(idx_dir, 'docs.list')
     lex_path = os.path.join(idx_dir, 'words.lex')
 
-    documents = Documents.load(doc_path)
-    lexicon = Lexicon.load(lex_path)
+    documents = index.Documents.load(doc_path)
+    lexicon = index.Lexicon.load(lex_path)
     return documents, lexicon
 
 
@@ -50,14 +51,14 @@ class TestTokenize(unittest.TestCase):
 
     def test_tokenize(self):
         text = 'I\'m a string! This is is a tokenizer test.'
-        tokens = list(tokenize(text))
+        tokens = list(index.tokenize(text))
         self.assertTrue(isinstance(tokens[0], str))
 
 
 class TestBinaryFormat(unittest.TestCase):
 
     def test_datum(self):
-        bf = BinaryFormat.default()
+        bf = index.BinaryFormat.default()
         self.assertEqual(0, bf.decode_datum(bf.encode_datum(0)))
         self.assertEqual(111, bf.decode_datum(bf.encode_datum(111)))
         self.assertEqual(
@@ -65,7 +66,7 @@ class TestBinaryFormat(unittest.TestCase):
             bf.decode_datum(bf.encode_datum(bf.max_datum_value)))
 
     def test_time_interval(self):
-        bf = BinaryFormat.default()
+        bf = index.BinaryFormat.default()
         self.assertEqual((0, 0), bf.decode_time_interval(
                          bf.encode_time_interval(0, 0)))
         self.assertEqual((0, 100), bf.decode_time_interval(
@@ -83,21 +84,21 @@ class TestInvertedIndex(unittest.TestCase):
         idx_dir = os.path.join(TMP_DIR, TEST_INDEX_SUBDIR)
         idx_path = os.path.join(idx_dir, 'index.bin')
         documents, lexicon = get_docs_and_lex(idx_dir)
-        with InvertedIndex(idx_path, lexicon, documents) as index:
+        with index.InvertedIndex(idx_path, lexicon, documents) as inv_index:
             # Unigram search
-            r = index.search('THE')
+            r = inv_index.search('THE')
             for i, d in enumerate(r.documents):
                 self.assertEqual(d.count, len(list(d.locations)))
             self.assertEqual(i + 1, r.count)
 
             # N-gram search
-            r = index.search('UNITED STATES')
+            r = inv_index.search('UNITED STATES')
             for d in r.documents:
                 for l in d.locations:
                     pass
 
             # N-gram search
-            r = index.search('UNITED STATES OF AMERICA')
+            r = inv_index.search('UNITED STATES OF AMERICA')
             for d in r.documents:
                 for l in d.locations:
                     pass
@@ -109,32 +110,52 @@ class TestDocumentData(unittest.TestCase):
         idx_dir = os.path.join(TMP_DIR, TEST_INDEX_SUBDIR)
         data_path = os.path.join(idx_dir, 'docs.bin')
         documents, lexicon = get_docs_and_lex(idx_dir)
-        with DocumentData(data_path, lexicon, documents) as docdata:
+        with index.DocumentData(data_path, lexicon, documents) as doc_data:
             for i in range(len(documents)):
-                for t in docdata.tokens(i):
+                for t in doc_data.tokens(i):
                     pass
-                for t in docdata.tokens(i, decode=True):
+                for t in doc_data.tokens(i, decode=True):
                     pass
 
     def test_time_index(self):
         idx_dir = os.path.join(TMP_DIR, TEST_INDEX_SUBDIR)
         data_path = os.path.join(idx_dir, 'docs.bin')
         documents, lexicon = get_docs_and_lex(idx_dir)
-        with DocumentData(data_path, lexicon, documents) as docdata:
+        with index.DocumentData(data_path, lexicon, documents) as doc_data:
             for i in range(len(documents)):
-                for interval in docdata.token_intervals(i, 0, 2 ** 16):
+                for interval in doc_data.token_intervals(i, 0, 2 ** 16):
                     for t in interval.tokens:
                         pass
-                for interval in docdata.token_intervals(i, 0, 0):
+                for interval in doc_data.token_intervals(i, 0, 0):
                     for t in interval.tokens:
                         pass
-                for interval in docdata.token_intervals(i, 0, 2 ** 16,
-                                                        decode=True):
+                for interval in doc_data.token_intervals(i, 0, 2 ** 16,
+                                                         decode=True):
                     for t in interval.tokens:
                         pass
-                for interval in docdata.token_intervals(i, 0, 0, decode=True):
+                for interval in doc_data.token_intervals(i, 0, 0, decode=True):
                     for t in interval.tokens:
                         pass
+
+
+class TestUtils(unittest.TestCase):
+
+    def test_window(self):
+        input = [0, 1, 2, 3]
+        self.assertListEqual(
+            list(utils.window(input, 2)), [(0, 1), (1, 2), (2, 3)])
+        self.assertListEqual(
+            list(utils.window(input, 3)), [(0, 1, 2), (1, 2, 3)])
+
+    def test_topic_search(self):
+        idx_dir = os.path.join(TMP_DIR, TEST_INDEX_SUBDIR)
+        idx_path = os.path.join(idx_dir, 'index.bin')
+        documents, lexicon = get_docs_and_lex(idx_dir)
+        with index.InvertedIndex(idx_path, lexicon, documents) as inv_index:
+            r = utils.topic_search(
+                ['UNITED STATES', 'AMERICA', 'US'], inv_index)
+            for i, d in enumerate(r.documents):
+                self.assertEqual(d.count, len(list(d.locations)))
 
 
 class TestScripts(unittest.TestCase):
@@ -154,7 +175,7 @@ class TestScripts(unittest.TestCase):
         build_metadata.main(idx_dir, True)
 
         documents, lexicon = get_docs_and_lex(idx_dir)
-        with MetadataIndex(
+        with index.MetadataIndex(
                 meta_path, documents,
                 build_metadata.NLPTagFormat()) as metadata:
             for d in documents:
