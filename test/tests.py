@@ -50,9 +50,10 @@ def get_docs_and_lex(idx_dir):
 class TestTokenize(unittest.TestCase):
 
     def test_tokenize(self):
-        text = 'I\'m a string! This is is a tokenizer test.'
+        text = 'I\'m a string! This is a tokenizer test.'
         tokens = list(index.tokenize(text))
         self.assertTrue(isinstance(tokens[0], str))
+        self.assertEqual(len(tokens), 11)
 
 
 class TestBinaryFormat(unittest.TestCase):
