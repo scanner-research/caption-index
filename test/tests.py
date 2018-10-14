@@ -91,17 +91,17 @@ class TestInvertedIndex(unittest.TestCase):
                 self.assertEqual(d.count, len(list(d.locations)))
             self.assertEqual(i + 1, r.count)
 
-            # N-gram search
+            # Bigram search
             r = inv_index.search('UNITED STATES')
             for d in r.documents:
                 for l in d.locations:
-                    pass
+                    self.assertEquals(l.max_index - l.min_index, 1)
 
             # N-gram search
             r = inv_index.search('UNITED STATES OF AMERICA')
             for d in r.documents:
                 for l in d.locations:
-                    pass
+                    self.assertEquals(l.max_index - l.min_index, 3)
 
 
 class TestDocumentData(unittest.TestCase):

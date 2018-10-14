@@ -32,8 +32,11 @@ def _deoverlap_location_results(location_results):
     for lr in location_results:
         if curr_lr is None:
             curr_lr = lr
-        elif curr_lr.end <= lr.start:
-            curr_lr = curr_lr._replace(end=max(lr.end, curr_lr.end))
+        elif curr_lr.end >= lr.start:
+            curr_lr = curr_lr._replace(
+                end=max(lr.end, curr_lr.end),
+                min_index=min(lr.min_index, curr_lr.min_index),
+                max_index=max(lr.max_index, curr_lr.max_index))
         else:
             new_location_results.append(curr_lr)
             curr_lr = lr
@@ -117,7 +120,7 @@ def _union_document_results(document_results):
                 locations=iter(new_location_results))
 
 
-def topic_search(phrases, inverted_index, window_size=120):
+def topic_search(phrases, inverted_index, window_size=30):
     """
     Search for time segments where any of the phrases occur with time windows
     dilated by window size seconds.

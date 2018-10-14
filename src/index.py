@@ -5,6 +5,7 @@ Indexes for srt files
 import mmap
 import msgpack
 import spacy
+import types
 from abc import ABC, abstractmethod, abstractproperty
 from collections import namedtuple, deque
 
@@ -330,9 +331,10 @@ class InvertedIndex(_BinaryFormatFile):
 
     LocationResult = namedtuple(
         'LocationResult', [
-            'index',    # Position in document
-            'start',    # Start time in seconds
-            'end'       # End time in seconds
+            'min_index',    # Start position in document
+            'max_index',    # End position in document
+            'start',        # Start time in seconds
+            'end'           # End time in seconds
         ])
 
     DocumentResult = namedtuple(
@@ -369,9 +371,15 @@ class InvertedIndex(_BinaryFormatFile):
             tokens = text
             if len(tokens) == 0:
                 raise ValueError('No words in input')
+        elif isinstance(text, types.GeneratorType):
+            tokens = list(text)
+            if len(tokens) == 0:
+                raise ValueError('No words in input')
+        else:
+            raise TypeError('Unsupported type: {}'.format(type(text)))
         return self.ngram_search(*tokens)
 
-    # TODO: there are more optimized ways to do this
+    # TODO: there are more optimized ways to do this with query planning
     def ngram_search(self, first_word, *other_words):
         partial_result = self.unigram_search(first_word)
         for i, next_word in enumerate(other_words):
@@ -389,7 +397,8 @@ class InvertedIndex(_BinaryFormatFile):
             start, end = self._time_int_at(offset)
             offset += self._bin_fmt.time_interval_bytes
             yield InvertedIndex.LocationResult(
-                index, millis_to_seconds(start),
+                index, index,
+                millis_to_seconds(start),
                 millis_to_seconds(end))
 
     def _get_documents(self, offset, count):
@@ -457,14 +466,14 @@ class InvertedIndex(_BinaryFormatFile):
                         a_ent = next(a_head.locations)
                         b_ent = next(b_head.locations)
                         while True:
-                            if a_ent.index + gap == b_ent.index:
+                            if a_ent.min_index + gap == b_ent.min_index:
                                 if locations is None:
                                     locations = deque()
-                                locations.append(InvertedIndex.LocationResult(
-                                    a_ent.index, a_ent.start, b_ent.end))
+                                locations.append(a_ent._replace(
+                                    max_index=b_ent.max_index, end=b_ent.end))
                                 a_ent = next(a_head.locations)
                                 b_ent = next(b_head.locations)
-                            elif a_ent.index + gap < b_ent.index:
+                            elif a_ent.min_index + gap < b_ent.min_index:
                                 a_ent = next(a_head.locations)
                             else:
                                 b_ent = next(b_head.locations)
