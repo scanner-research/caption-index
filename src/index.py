@@ -92,6 +92,7 @@ class Documents(object):
             'id',
             'name',                 # File name
             'length',               # Number of tokens in file
+            'duration',             # Duration in seconds
             'time_index_offset',    # Time index offset in binary docs file
             'token_data_offset',    # Token data offset in binary docs file
             'meta_data_offset'      # Offset in the metadata file
@@ -134,6 +135,7 @@ class Documents(object):
                 f.write('\t'.join([
                     d.name,
                     str(d.length),
+                    str(d.duration),
                     str(d.time_index_offset),
                     str(d.token_data_offset),
                     str(d.meta_data_offset)
@@ -145,11 +147,13 @@ class Documents(object):
         documents = []
         with open(path, 'r') as f:
             for i, line in enumerate(f):
-                name, length, ti_ofs, td_ofs, md_ofs = line.split('\t', 4)
+                name, length, duration, ti_ofs, td_ofs, md_ofs = \
+                    line.split('\t', 5)
                 documents.append(Documents.Document(
                     id=i,
                     name=name,
                     length=int(length),
+                    duration=float(duration),
                     time_index_offset=int(ti_ofs),
                     token_data_offset=int(td_ofs),
                     meta_data_offset=int(md_ofs)
@@ -241,7 +245,8 @@ class BinaryFormat(object):
         return (i).to_bytes(self._datum_bytes, self._endian)
 
     def decode_datum(self, s):
-        assert len(s) == self._datum_bytes, '{} is the wrong length'.format(len(s))
+        assert len(s) == self._datum_bytes, \
+            '{} is the wrong length'.format(len(s))
         return int.from_bytes(s, self._endian)
 
     @staticmethod

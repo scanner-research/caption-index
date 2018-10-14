@@ -20,7 +20,7 @@ from tqdm import tqdm
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)) + '/../src')
 
-from index import tokenize, Lexicon, Documents, BinaryFormat
+from index import tokenize, millis_to_seconds, Lexicon, Documents, BinaryFormat
 
 
 BINARY_FORMAT = BinaryFormat.default()
@@ -205,12 +205,15 @@ def write_doc_data(doc_lines, out_path):
             f.write(BINARY_FORMAT.encode_datum(position))
 
         doc_len = 0
+        doc_duration = 0
         doc_token_data_start = f.tell()
-        for _, _, _, tokens in doc_lines:
+        for _, _, end, tokens in doc_lines:
             for t in tokens:
                 f.write(BINARY_FORMAT.encode_datum(t))
             doc_len += len(tokens)
-    return doc_time_idx_start, doc_token_data_start, doc_len
+            doc_duration = max(doc_duration, end)
+    return doc_time_idx_start, doc_token_data_start, doc_len, \
+        millis_to_seconds(doc_duration)
 
 
 def index_batch(doc_batch, out_path_prefix):
@@ -272,9 +275,10 @@ def index_all_docs(doc_dir, doc_names, lexicon, bin_doc_path, out_dir,
             doc_offsets = async.get()
             for a, b in zip(doc_batch, doc_offsets):
                 doc_id, _ = a
-                doc_time_idx_offset, doc_token_data_offset, doc_length = b
+                doc_time_idx_offset, doc_token_data_offset, doc_length, doc_duration = b
                 documents[doc_id] = Documents.Document(
                     id=doc_id, name=doc_names[doc_id], length=doc_length,
+                    duration=doc_duration,
                     time_index_offset=doc_time_idx_offset + global_offset,
                     token_data_offset=doc_token_data_offset + global_offset,
                     meta_data_offset=-1)

@@ -95,13 +95,13 @@ class TestInvertedIndex(unittest.TestCase):
             r = inv_index.search('UNITED STATES')
             for d in r.documents:
                 for l in d.locations:
-                    self.assertEquals(l.max_index - l.min_index, 1)
+                    self.assertEqual(l.max_index - l.min_index, 1)
 
             # N-gram search
             r = inv_index.search('UNITED STATES OF AMERICA')
             for d in r.documents:
                 for l in d.locations:
-                    self.assertEquals(l.max_index - l.min_index, 3)
+                    self.assertEqual(l.max_index - l.min_index, 3)
 
 
 class TestDocumentData(unittest.TestCase):
