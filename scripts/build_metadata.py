@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 """
-Search for phrases across all of the documents
+Build a metadata index containing part-of-speech tags.
 """
 
 import argparse
