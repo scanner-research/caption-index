@@ -5,7 +5,7 @@ Higher level search and NLP functionality built over the base index
 import heapq
 from collections import deque
 
-from index import InvertedIndex
+from .index import InvertedIndex
 
 
 def window(tokens, n):
