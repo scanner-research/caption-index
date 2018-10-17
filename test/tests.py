@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from subprocess import check_call
 
-sys.path.append(os.path.dirname(os.path.abspath(__file__)) + '/../src')
+sys.path.append(os.path.dirname(os.path.abspath(__file__)) + '/../captions')
 sys.path.append(os.path.dirname(os.path.abspath(__file__)) + '/../scripts')
 
 import build
@@ -16,7 +16,7 @@ import search
 import build_metadata
 import build_metadata
 import index
-import utils
+import util
 
 
 TMP_DIR = None
@@ -139,21 +139,21 @@ class TestDocumentData(unittest.TestCase):
                         pass
 
 
-class TestUtils(unittest.TestCase):
+class TestUtil(unittest.TestCase):
 
     def test_window(self):
         input = [0, 1, 2, 3]
         self.assertListEqual(
-            list(utils.window(input, 2)), [(0, 1), (1, 2), (2, 3)])
+            list(util.window(input, 2)), [(0, 1), (1, 2), (2, 3)])
         self.assertListEqual(
-            list(utils.window(input, 3)), [(0, 1, 2), (1, 2, 3)])
+            list(util.window(input, 3)), [(0, 1, 2), (1, 2, 3)])
 
     def test_topic_search(self):
         idx_dir = os.path.join(TMP_DIR, TEST_INDEX_SUBDIR)
         idx_path = os.path.join(idx_dir, 'index.bin')
         documents, lexicon = get_docs_and_lex(idx_dir)
         with index.InvertedIndex(idx_path, lexicon, documents) as inv_index:
-            r = utils.topic_search(
+            r = util.topic_search(
                 ['UNITED STATES', 'AMERICA', 'US'], inv_index)
             for i, d in enumerate(r.documents):
                 self.assertEqual(d.count, len(list(d.locations)))

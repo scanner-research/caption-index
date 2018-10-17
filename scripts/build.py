@@ -18,7 +18,7 @@ from subprocess import check_call
 from threading import Lock
 from tqdm import tqdm
 
-sys.path.append(os.path.dirname(os.path.abspath(__file__)) + '/../src')
+sys.path.append(os.path.dirname(os.path.abspath(__file__)) + '/../captions')
 
 from index import tokenize, millis_to_seconds, Lexicon, Documents, BinaryFormat
 

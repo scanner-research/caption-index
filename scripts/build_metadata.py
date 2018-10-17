@@ -13,7 +13,7 @@ from collections import deque
 from spacy.tokens import Doc
 from tqdm import tqdm
 
-sys.path.append(os.path.dirname(os.path.abspath(__file__)) + '/../src')
+sys.path.append(os.path.dirname(os.path.abspath(__file__)) + '/../captions')
 
 from index import Lexicon, Documents, DocumentData, MetadataFormat
 

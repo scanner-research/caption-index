@@ -10,10 +10,10 @@ import sys
 import time
 import traceback
 
-sys.path.append(os.path.dirname(os.path.abspath(__file__)) + '/../src')
+sys.path.append(os.path.dirname(os.path.abspath(__file__)) + '/../captions')
 
 from index import tokenize, Lexicon, Documents, InvertedIndex, DocumentData
-from utils import topic_search
+from util import topic_search
 
 
 DEFAULT_CONTEXT = 3

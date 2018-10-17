@@ -20,7 +20,7 @@ def window(tokens, n):
             yield tuple(buffer)
 
 
-def _dilate_locations(locations, window):
+def _dilate_location_results(locations, window):
     for l in locations:
         yield l._replace(
             start=max(l.start - window, 0), end=l.end + window)
@@ -52,7 +52,7 @@ def _dilate_document_results(document_results, window):
     """
     for dr in document_results:
         location_results = _deoverlap_location_results(
-            _dilate_locations(dr.locations, window))
+            _dilate_location_results(dr.locations, window))
         yield dr._replace(
             count=len(location_results),
             locations=iter(location_results))
