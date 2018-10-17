@@ -3,9 +3,15 @@ Higher level search and NLP functionality built over the base index
 """
 
 import heapq
+import numpy as np
 from collections import deque
 
-from .index import InvertedIndex
+# FIXME: I'm not really sure what the correct thing to do here is. This depends
+# on how the module is integrated.
+try:
+    from index import Lexicon, InvertedIndex
+except ImportError:
+    from .index import Lexicon, InvertedIndex
 
 
 def window(tokens, n):
@@ -18,6 +24,12 @@ def window(tokens, n):
             buffer.popleft()
         if len(buffer) == n:
             yield tuple(buffer)
+
+
+def frequent_words(lexicon, percentile=99.7):
+    assert isinstance(lexicon, Lexicon)
+    threshold = np.percentile([w.count for w in lexicon], percentile)
+    return [w for w in lexicon if w.count >= threshold]
 
 
 def _dilate_location_results(locations, window):

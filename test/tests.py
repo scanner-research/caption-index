@@ -14,7 +14,6 @@ import build
 import scan
 import search
 import build_metadata
-import build_metadata
 import index
 import util
 
@@ -148,6 +147,13 @@ class TestUtil(unittest.TestCase):
         self.assertListEqual(
             list(util.window(input, 3)), [(0, 1, 2), (1, 2, 3)])
 
+    def test_frequent_words(self):
+        idx_dir = os.path.join(TMP_DIR, TEST_INDEX_SUBDIR)
+        _, lexicon = get_docs_and_lex(idx_dir)
+        self.assertEqual(len(util.frequent_words(lexicon, 100)), 1)
+        self.assertEqual(len(util.frequent_words(lexicon, 0)), len(lexicon))
+        self.assertGreater(len(util.frequent_words(lexicon, 99)), 0)
+
     def test_topic_search(self):
         idx_dir = os.path.join(TMP_DIR, TEST_INDEX_SUBDIR)
         idx_path = os.path.join(idx_dir, 'index.bin')
@@ -180,7 +186,7 @@ class TestScripts(unittest.TestCase):
                 meta_path, documents,
                 build_metadata.NLPTagFormat()) as metadata:
             for d in documents:
-                self.assertTrue(d.meta_data_offset >= 0)
+                self.assertGreaterEqual(d.meta_data_offset, 0)
                 for tag in metadata.metadata(d):
                     self.assertTrue(isinstance(tag, str))
 

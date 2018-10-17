@@ -1,4 +1,5 @@
 msgpack
+numpy
 pysrt
 spacy
 tqdm
