@@ -131,9 +131,9 @@ def topic_search(phrases, inverted_index, window_size=30):
     for phrase in phrases:
         try:
             result = inverted_index.search(phrase)
-        except (KeyError, IndexError):
+            results.append(result)
+        except (KeyError, IndexError, ValueError):
             pass
-        results.append(result)
 
     document_results = deque()
     for r in results:
