@@ -56,34 +56,36 @@ def filter_lexicon(lexicon, min_count):
     return counts, total
 
 
-def count_ngrams(i, n):
+def batch_count_ngrams(base_doc, batch_size, n):
     counts = Counter()
     total = 0
-    for t in window(DOCUMENT_DATA.tokens(i), n):
-        total += 1
-        if t[1:] in NGRAM_COUNTS and t[1-n:] in NGRAM_COUNTS:
-            counts[t] += 1
-    return counts, total
+    for i in range(base_doc, base_doc + batch_size):
+        for t in window(DOCUMENT_DATA.tokens(i), n):
+            total += 1
+            if t[1:] in NGRAM_COUNTS and t[1-n:] in NGRAM_COUNTS:
+                counts[t] += 1
+    return batch_size, counts, total
 
 
-def single_pass_count_ngrams(n, limit, workers):
+def single_pass_count_ngrams(n, limit, workers, batch_size=1000):
     with tqdm(total=limit, desc='Counting {}-grams'.format(n)) as pbar, \
             Pool(processes=workers) as pool:
 
         def progress(ignored):
-            pbar.update(1)
+            pbar.update(ignored[0])
 
         start_time = time.time()
 
         results = deque()
-        for i in range(limit):
+        for i in range(0, limit, batch_size):
             results.append(pool.apply_async(
-                count_ngrams, (i, n), callback=progress))
+                batch_count_ngrams,
+                (i, min(batch_size, limit - i), n), callback=progress))
 
         counts = Counter()
         total = 0
         for a in results:
-            doc_counts, doc_total = a.get()
+            _, doc_counts, doc_total = a.get()
             counts += doc_counts
             total += doc_total
         end_time = time.time()
@@ -122,6 +124,7 @@ def main(index_dir, n, min_count, workers, limit):
                 if count >= min_count:
                     NGRAM_COUNTS[ngram] = count
             ngram_total.append(total)
+            del counts, total
 
     print('Saving results: {} ngrams'.format(len(NGRAM_COUNTS)))
     with open(out_path, 'wb') as f:
