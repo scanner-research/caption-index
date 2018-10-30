@@ -14,6 +14,7 @@ import build
 import scan
 import search
 import build_metadata
+import build_ngrams
 import index
 import util
 
@@ -189,6 +190,29 @@ class TestScripts(unittest.TestCase):
                 self.assertGreaterEqual(d.meta_data_offset, 0)
                 for tag in metadata.metadata(d):
                     self.assertTrue(isinstance(tag, str))
+
+    def test_build_ngrams(self):
+        idx_dir = os.path.join(TMP_DIR, TEST_INDEX_SUBDIR)
+        ngram_path = os.path.join(idx_dir, 'ngrams.bin')
+
+        build_ngrams.main(idx_dir, n=5, min_count=10, workers=os.cpu_count(),
+                          limit=None)
+
+        _, lexicon = get_docs_and_lex(idx_dir)
+        ngram_frequency = index.NgramFrequency(ngram_path, lexicon)
+
+        def test_phrase(tokens):
+            self.assertTrue(' '.join(tokens) in ngram_frequency)
+            self.assertGreater(ngram_frequency[' '.join(tokens)], 0)
+            self.assertGreater(ngram_frequency[tokens], 0)
+            ids = tuple(lexicon[t].id for t in tokens)
+            self.assertGreater(ngram_frequency[ids], 0)
+
+        test_phrase(('UNITED',))
+        test_phrase(('UNITED', 'STATES'))
+        test_phrase(('THE', 'UNITED', 'STATES'))
+        test_phrase(('OF', 'THE', 'UNITED', 'STATES'))
+        test_phrase(('PRESIDENT', 'OF', 'THE', 'UNITED', 'STATES'))
 
 
 if __name__ == '__main__':

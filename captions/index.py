@@ -679,3 +679,39 @@ class MetadataIndex(_MemoryMappedFile):
 
         start_offset = doc.meta_data_offset + start_pos * self._meta_fmt.size
         return self._metadata(start_offset, end_pos - start_pos)
+
+
+class NgramFrequency(object):
+    """A map from ngrams to their frequencies"""
+
+    def __init__(self, path, lexicon):
+        """Dictionary of ngram to frequency"""
+        assert isinstance(path, str)
+        assert isinstance(lexicon, Lexicon)
+        self._lexicon = lexicon
+        with open(path, 'rb') as f:
+            self._counts, self._totals = msgpack.load(f, use_list=False)
+
+    def __iter__(self):
+        return self._counts.__iter__()
+
+    def __getitem__(self, key):
+        if isinstance(key, str):
+            key = tuple(tokenize(key.strip()))
+        denom = self._totals[len(key) - 1]
+        if isinstance(key[0], int):
+            return self._counts[key] / denom
+        elif isinstance(key[0], str):
+            key = tuple(self._lexicon[k].id for k in key)
+            return self._counts[key] / denom
+        raise TypeError('Not supported for {}'.format(type(key)))
+
+    def __contains__(self, key):
+        try:
+            self.__getitem__(key)
+        except (KeyError, IndexError):
+            return False
+        return True
+
+    def __len__(self):
+        return len(self._counts)
