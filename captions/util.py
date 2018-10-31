@@ -3,27 +3,42 @@ Higher level search and NLP functionality built over the base index
 """
 
 import heapq
+import itertools
+import math
 import numpy as np
-from collections import deque
+import sys
+import os
+from collections import deque, Counter
+from multiprocessing import Pool
 
 # FIXME: I'm not really sure what the correct thing to do here is. This depends
 # on how the module is integrated.
 try:
-    from index import Lexicon, InvertedIndex
+    from index import Lexicon, InvertedIndex, DocumentData, NgramFrequency
 except ImportError:
-    from .index import Lexicon, InvertedIndex
+    from .index import Lexicon, InvertedIndex, DocumentData, NgramFrequency
 
 
-def window(tokens, n):
+VERBOSE = False
+
+
+def window(tokens, n, subwindows=False):
     """Takes an iterable words and returns a windowed iterator"""
-    assert n > 1, 'Windows of size 1 are silly...'
     buffer = deque()
     for t in tokens:
         buffer.append(t)
-        if len(buffer) > n:
-            buffer.popleft()
         if len(buffer) == n:
-            yield tuple(buffer)
+            if subwindows:
+                for i in range(n):
+                    yield tuple(itertools.islice(buffer, 0, i + 1))
+            else:
+                yield tuple(buffer)
+            buffer.popleft()
+    if subwindows:
+        while len(buffer) > 0:
+            for i in range(len(buffer)):
+                yield tuple(itertools.islice(buffer, 0, i + 1))
+            buffer.popleft()
 
 
 def frequent_words(lexicon, percentile=99.7):
@@ -45,6 +60,9 @@ def _deoverlap_location_results(location_results):
         if curr_lr is None:
             curr_lr = lr
         elif curr_lr.end >= lr.start:
+            if VERBOSE and curr_lr.start <= lr.start:
+                print('{} > {}'.format(curr_lr.start, lr.start),
+                      file=sys.stderr)
             curr_lr = curr_lr._replace(
                 end=max(lr.end, curr_lr.end),
                 min_index=min(lr.min_index, curr_lr.min_index),
@@ -153,3 +171,81 @@ def topic_search(phrases, inverted_index, window_size=30):
             _dilate_document_results(r.documents, window_size))
     return InvertedIndex.Result(
         count=None, documents=_union_document_results(document_results))
+
+
+_DOCUMENT_DATA = None
+_NGRAM_FREQUENCY = None
+
+
+def _pmi_worker(batch, n):
+    length_totals = [0] * n
+    ngram_counts = Counter()
+    for doc_id, locs in batch:
+        for start, end in locs:
+            start_pos = _DOCUMENT_DATA.time_to_position(doc_id, start)
+            end_pos = _DOCUMENT_DATA.time_to_position(doc_id, end)
+
+            # if VERBOSE:
+            #     if start_pos <= lr.min_index:
+            #         print('Bad start idx: {} > {}'.format(start_pos,
+            #               lr.min_index), file=sys.stderr)
+            #     if end_pos >= lr.max_index:
+            #         print('Bad end idx: {} < {}'.format(end_pos, lr.max_index),
+            #               file=sys.stderr)
+
+            for ngram in window(_DOCUMENT_DATA.tokens(doc_id, start_pos,
+                                end_pos), n, True):
+                if ngram in _NGRAM_FREQUENCY:
+                    ngram_counts[ngram] += 1
+                length_totals[len(ngram) - 1] += 1
+    return length_totals, ngram_counts
+
+
+DEFAULT_WORKERS = os.cpu_count()
+
+
+def pmi_search(phrases, inverted_index, document_data, ngram_frequency,
+               n, window_size=30, workers=DEFAULT_WORKERS, batch_size=10000):
+    """
+    Get ngrams that occur in the context of the query phrases.
+    """
+    assert isinstance(inverted_index, InvertedIndex)
+    assert isinstance(document_data, DocumentData)
+    assert isinstance(ngram_frequency, NgramFrequency)
+    intervals = topic_search(phrases, inverted_index, window_size)
+
+    length_totals = [0] * n
+    ngram_scores = Counter()
+
+    global _DOCUMENT_DATA, _NGRAM_FREQUENCY
+    _DOCUMENT_DATA = document_data
+    _NGRAM_FREQUENCY = ngram_frequency
+    with Pool(processes=workers) as pool:
+        batch = deque()
+        results = deque()
+        for dr in intervals.documents:
+            locations = deque()
+            for lr in dr.locations:
+                locations.append((lr.start, lr.end))
+            batch.append((dr.id, locations))
+
+            if len(batch) == batch_size:
+                results.append(pool.apply_async(_pmi_worker, (batch, n)))
+                batch = deque()
+
+        if len(batch) > 0:
+            results.append(pool.apply_async(_pmi_worker, (batch, n)))
+
+        for result in results:
+            batch_length_totals, batch_ngram_counts = result.get()
+            for i, v in enumerate(batch_length_totals):
+                length_totals[i] += v
+            for k in batch_ngram_counts:
+                ngram_scores[k] += batch_ngram_counts[k]
+
+    log_length_totals = [math.log(x) if x > 0 else float('-inf')
+                         for x in length_totals]
+    for k, v in ngram_scores.items():
+        ngram_scores[k] = (math.log(v) - log_length_totals[len(k) - 1] -
+                           math.log(ngram_frequency[k]))
+    return ngram_scores

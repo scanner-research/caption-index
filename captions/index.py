@@ -616,6 +616,42 @@ class DocumentData(_BinaryFormatFile):
                         length, decode
                     ))
 
+    def time_to_position(self, doc, time):
+        """Get the token offset for a time using binary search"""
+        if isinstance(doc, Documents.Document):
+            doc = self._documents[doc.id]
+        else:
+            doc = self._documents[doc]
+
+        assert doc.length >= 0, 'Invalid document length: {}'.format(doc.length)
+        assert doc.time_index_offset >= 0, 'Invalid time index offset'
+        assert doc.token_data_offset >= 0, 'Invalid data offset'
+
+        entry_size = self._bin_fmt.time_interval_bytes + self._bin_fmt.datum_bytes
+        entry_count = int((doc.token_data_offset - doc.time_index_offset) / entry_size)
+        max_idx = entry_count
+        min_idx = 0
+        time_ms = time * 1000
+        while max_idx > min_idx:
+            mid_idx = min_idx + int((max_idx - min_idx) / 2)
+            mid_offset = doc.time_index_offset + mid_idx * entry_size
+            start, end = self._time_int_at(mid_offset)
+            if time_ms < start:
+                max_idx = mid_idx
+            elif time_ms > end:
+                min_idx = mid_idx + 1
+            else:
+                max_idx = mid_idx
+                min_idx = mid_idx
+
+        if min_idx == 0:
+            return 0
+        elif min_idx == entry_count:
+            return doc.length
+        else:
+            offset = doc.time_index_offset + min_idx * entry_size
+            return self._datum_at(offset + self._bin_fmt.time_interval_bytes)
+
 
 class MetadataFormat(ABC):
 

@@ -56,7 +56,6 @@ def run_search(query, documents, index, document_data, context_size, silent):
             q = q.strip()
             if len(q) > 0:
                 try:
-                    print(tokenize(q))
                     query_list.append(tokenize(q))
                 except KeyError:
                     print('Not found:', q)

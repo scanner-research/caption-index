@@ -13,6 +13,7 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)) + '/../scripts')
 import build
 import scan
 import search
+import lexicon as pmi_lexicon
 import build_metadata
 import build_ngrams
 import index
@@ -213,6 +214,8 @@ class TestScripts(unittest.TestCase):
         test_phrase(('THE', 'UNITED', 'STATES'))
         test_phrase(('OF', 'THE', 'UNITED', 'STATES'))
         test_phrase(('PRESIDENT', 'OF', 'THE', 'UNITED', 'STATES'))
+
+        pmi_lexicon.main(idx_dir, ['UNITED', 'STATES'], 5, 30, 10)
 
 
 if __name__ == '__main__':
