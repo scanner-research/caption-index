@@ -610,7 +610,7 @@ class DocumentData(_BinaryFormatFile):
             if min(end, 1000 * end_time) - max(start, 1000 * start_time) > 0:
                 length = next_position - position
                 yield DocumentData.Interval(
-                    start=start, end=end, position=position, length=length,
+                    start=start / 1000, end=end / 1000, position=position, length=length,
                     tokens=self._tokens(
                         base_token_offset + position * self._bin_fmt.datum_bytes,
                         length, decode
