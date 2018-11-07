@@ -607,7 +607,7 @@ class DocumentData(_BinaryFormatFile):
                 curr_offset += self._bin_fmt.time_interval_bytes
                 next_position = self._datum_at(curr_offset)
 
-            if min(end, end_time) - max(start, start_time) > 0:
+            if min(end, 1000 * end_time) - max(start, 1000 * start_time) > 0:
                 length = next_position - position
                 yield DocumentData.Interval(
                     start=start, end=end, position=position, length=length,
