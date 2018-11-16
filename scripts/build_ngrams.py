@@ -13,10 +13,8 @@ from tqdm import tqdm
 from collections import deque, Counter
 from multiprocessing import Pool
 
-sys.path.append(os.path.dirname(os.path.abspath(__file__)) + '/../captions')
-
-from index import Lexicon, Documents, DocumentData
-from util import window
+from captions import Lexicon, Documents, DocumentData
+from captions.util import window
 
 DEFAULT_WORKERS = os.cpu_count()
 DEFAULT_N = 5

@@ -10,7 +10,6 @@ import math
 import pysrt
 import os
 import shutil
-import sys
 import traceback
 from collections import defaultdict, deque, namedtuple, Counter
 from multiprocessing import Pool
@@ -18,10 +17,7 @@ from subprocess import check_call
 from threading import Lock
 from tqdm import tqdm
 
-sys.path.append(os.path.dirname(os.path.abspath(__file__)) + '/../captions')
-
-from index import tokenize, millis_to_seconds, Lexicon, Documents, BinaryFormat
-
+from captions import tokenize, Lexicon, Documents, BinaryFormat
 
 BINARY_FORMAT = BinaryFormat.default()
 MAX_WORD_LEN = 20
@@ -191,6 +187,10 @@ def write_inv_index(inv_index, out_path):
                 for (position, start, end) in postings:
                     f.write(BINARY_FORMAT.encode_datum(position))
                     f.write(BINARY_FORMAT.encode_time_interval(start, end))
+
+
+def millis_to_seconds(t):
+    return t / 1000
 
 
 def write_doc_data(doc_lines, out_path):

@@ -6,14 +6,11 @@ Search for phrases across all of the documents
 
 import argparse
 import os
-import sys
 import time
 import traceback
 
-sys.path.append(os.path.dirname(os.path.abspath(__file__)) + '/../captions')
-
-from index import tokenize, Lexicon, Documents, InvertedIndex, DocumentData
-from util import topic_search
+from captions import tokenize, Lexicon, Documents, InvertedIndex, DocumentData
+from captions.util import topic_search
 
 
 DEFAULT_CONTEXT = 3

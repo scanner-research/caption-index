@@ -7,15 +7,12 @@ Build a metadata index containing part-of-speech tags.
 import argparse
 import os
 import spacy
-import sys
 import traceback
 from collections import deque
 from spacy.tokens import Doc
 from tqdm import tqdm
 
-sys.path.append(os.path.dirname(os.path.abspath(__file__)) + '/../captions')
-
-from index import Lexicon, Documents, DocumentData, MetadataFormat
+from captions import Lexicon, Documents, DocumentData, MetadataFormat
 
 
 NLP = spacy.load('en', disable=['ner', 'parser'])

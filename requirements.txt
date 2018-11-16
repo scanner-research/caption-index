@@ -1,5 +1,6 @@
 msgpack
 numpy
 pysrt
+pytest
 spacy
 tqdm

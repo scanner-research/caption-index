@@ -5,6 +5,10 @@ for quick indexing and n-gram search. The goal of this module is provide
 reasonably efficient iterators over caption/text files for analytics code in
 Python, while limiting resident memory usage and IO/computational latency.
 
+## Install
+
+Run `python3 setup.py install --user`
+
 ## Usage
 
 #### Indexing your files
@@ -26,6 +30,12 @@ that were built by `scripts/build.py`.
 - `scripts/build_metadata.py` produces part-of-speech metadata and stores it
   in an indexable format.
 
+- `scripts/build_ngrams.py` produces ngram frequencies across the entire
+  dataset.
+
+- `scripts/lexicon.py` builds topic lexicons around ngrams using a PMI topic
+  model.
+
 ## Tests
 
-Run `test/tests.py`.
+Run `pytest -v tests`

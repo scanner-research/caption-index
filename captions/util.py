@@ -11,12 +11,7 @@ import os
 from collections import deque, Counter
 from multiprocessing import Pool
 
-# FIXME: I'm not really sure what the correct thing to do here is. This depends
-# on how the module is integrated.
-try:
-    from index import Lexicon, InvertedIndex, DocumentData, NgramFrequency
-except ImportError:
-    from .index import Lexicon, InvertedIndex, DocumentData, NgramFrequency
+from .index import Lexicon, InvertedIndex, DocumentData, NgramFrequency
 
 
 VERBOSE = False

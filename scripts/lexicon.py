@@ -7,15 +7,12 @@ Find lexicons of words around phrases
 import argparse
 import os
 import spacy
-import sys
 import time
 import traceback
 
-sys.path.append(os.path.dirname(os.path.abspath(__file__)) + '/../captions')
-
-from index import tokenize, Lexicon, Documents, InvertedIndex, DocumentData, \
-                  NgramFrequency
-from util import pmi_search
+from captions import tokenize, Lexicon, Documents, InvertedIndex, \
+    DocumentData, NgramFrequency
+from captions.util import pmi_search
 
 
 DEFAULT_WINDOW = 30

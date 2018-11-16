@@ -259,7 +259,7 @@ class BinaryFormat(object):
                 datum_bytes=3))
 
 
-def millis_to_seconds(t):
+def _millis_to_seconds(t):
     return t / 1000
 
 
@@ -403,8 +403,8 @@ class InvertedIndex(_BinaryFormatFile):
             offset += self._bin_fmt.time_interval_bytes
             yield InvertedIndex.LocationResult(
                 index, index,
-                millis_to_seconds(start),
-                millis_to_seconds(end))
+                _millis_to_seconds(start),
+                _millis_to_seconds(end))
 
     def _get_documents(self, offset, count):
         prev_doc_id = None

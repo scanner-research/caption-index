@@ -1,3 +1,7 @@
-/scripts/out/
+/build
+/dist
+/*.egg-info
 *.pyc
 *.bin
+*.lex
+/scripts/out
