@@ -11,7 +11,7 @@ from tqdm import tqdm
 from collections import deque
 from multiprocessing import Pool
 
-from captions import Lexicon, Documents, DocumentData
+from captions import Lexicon, Documents, CaptionIndex
 
 
 DEFAULT_WORKERS = os.cpu_count()
@@ -29,27 +29,27 @@ def get_args():
     return p.parse_args()
 
 
-DOCUMENT_DATA = None
+INDEX = None
 
 
 def count_tokens(i):
     count = 0
-    for t in DOCUMENT_DATA.tokens(i):
+    for t in INDEX.tokens(i):
         count += 1
     return count
 
 
 def main(index_dir, workers, limit):
     doc_path = os.path.join(index_dir, 'docs.list')
-    data_path = os.path.join(index_dir, 'docs.bin')
+    index_path = os.path.join(index_dir, 'index.bin')
     lex_path = os.path.join(index_dir, 'words.lex')
 
     documents = Documents.load(doc_path)
     lexicon = Lexicon.load(lex_path)
 
-    with DocumentData(data_path, lexicon, documents) as docdata:
-        global DOCUMENT_DATA
-        DOCUMENT_DATA = docdata
+    with CaptionIndex(index_path, lexicon, documents) as index:
+        global INDEX
+        INDEX = index
 
         if limit is None:
             limit = len(documents)

@@ -10,8 +10,7 @@ import spacy
 import time
 import traceback
 
-from captions import tokenize, Lexicon, Documents, InvertedIndex, \
-    DocumentData, NgramFrequency
+from captions import tokenize, Lexicon, Documents, CaptionIndex, NgramFrequency
 from captions.util import pmi_search
 
 
@@ -52,7 +51,7 @@ def filter_results(tokens):
     return True
 
 
-def run_search(query, lexicon, index, document_data, ngram_frequency, n,
+def run_search(query, lexicon, index, ngram_frequency, n,
                window_size, result_len):
     start_time = time.time()
     query_list = []
@@ -63,8 +62,7 @@ def run_search(query, lexicon, index, document_data, ngram_frequency, n,
                 query_list.append(tokenize(q))
             except KeyError:
                 print('Not found:', q)
-    result = pmi_search(query_list, index, document_data, ngram_frequency, n,
-                        window_size)
+    result = pmi_search(query_list, index, ngram_frequency, n, window_size)
     elapsed_time = time.time() - start_time
 
     for i in range(1, n + 1):
@@ -86,7 +84,6 @@ def run_search(query, lexicon, index, document_data, ngram_frequency, n,
 
 def main(index_dir, query, n, window_size, result_len):
     doc_path = os.path.join(index_dir, 'docs.list')
-    data_path = os.path.join(index_dir, 'docs.bin')
     lex_path = os.path.join(index_dir, 'words.lex')
     idx_path = os.path.join(index_dir, 'index.bin')
     ngram_path = os.path.join(index_dir, 'ngrams.bin')
@@ -95,11 +92,10 @@ def main(index_dir, query, n, window_size, result_len):
     lexicon = Lexicon.load(lex_path)
     ngram_frequency = NgramFrequency(ngram_path, lexicon)
 
-    with InvertedIndex(idx_path, lexicon, documents) as index, \
-            DocumentData(data_path, lexicon, documents) as document_data:
+    with CaptionIndex(idx_path, lexicon, documents) as index:
         if len(query) > 0:
             print('Query: ', query)
-            run_search(' '.join(query), lexicon, index, document_data,
+            run_search(' '.join(query), lexicon, index,
                        ngram_frequency, n, window_size, result_len)
         else:
             print('Enter a phrase or topic (phrases separated by commas):')
@@ -112,7 +108,7 @@ def main(index_dir, query, n, window_size, result_len):
                 query = query.strip()
                 if len(query) > 0:
                     try:
-                        run_search(query, lexicon, index, document_data,
+                        run_search(query, lexicon, index,
                                    ngram_frequency, n, window_size, result_len)
                     except Exception:
                         traceback.print_exc()

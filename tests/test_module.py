@@ -67,22 +67,24 @@ def test_tokenize():
     assert len(tokens) == 11
 
 
-def test_binary_format_datum():
+def test_binary_format():
     bf = captions.BinaryFormat.default()
-    assert 0 == bf.decode_datum(bf.encode_datum(0))
-    assert 111 == bf.decode_datum(bf.encode_datum(111))
+    assert 0 == bf._decode_datum(bf.encode_datum(0))
+    assert 111 == bf._decode_datum(bf.encode_datum(111))
     assert bf.max_datum_value == \
-        bf.decode_datum(bf.encode_datum(bf.max_datum_value))
+        bf._decode_datum(bf.encode_datum(bf.max_datum_value))
 
+    assert 0 == bf._decode_u32(bf.encode_u32(0))
+    assert 111 == bf._decode_u32(bf.encode_u32(111))
+    assert bf.max_datum_value == \
+        bf._decode_u32(bf.encode_u32(bf.max_datum_value))
 
-def test_binary_format_time_interval():
-    bf = captions.BinaryFormat.default()
-    assert (0, 0) == bf.decode_time_interval(bf.encode_time_interval(0, 0))
-    assert (0, 100) == bf.decode_time_interval(bf.encode_time_interval(0, 100))
-    assert (777, 888) == bf.decode_time_interval(
+    assert (0, 0) == bf._decode_time_interval(bf.encode_time_interval(0, 0))
+    assert (0, 100) == bf._decode_time_interval(bf.encode_time_interval(0, 100))
+    assert (777, 888) == bf._decode_time_interval(
         bf.encode_time_interval(777, 888))
     assert (76543210, 76543210 + bf.max_time_interval) == \
-        bf.decode_time_interval(bf.encode_time_interval(
+        bf._decode_time_interval(bf.encode_time_interval(
             76543210, 76543210 + bf.max_time_interval))
 
 
@@ -90,57 +92,51 @@ def test_inverted_index():
     idx_dir = os.path.join(TMP_DIR, TEST_INDEX_SUBDIR)
     idx_path = os.path.join(idx_dir, 'index.bin')
     documents, lexicon = _get_docs_and_lex(idx_dir)
-    with captions.InvertedIndex(idx_path, lexicon, documents) as inv_index:
+
+    def test_search_and_contains(tokens):
+        ids = index.contains(tokens)
+        search_ids = set()
+        for d in index.search(tokens):
+            assert len(d.postings) > 0
+            for l in d.postings:
+                assert l.len == len(tokens)
+            search_ids.add(d.id)
+        assert ids == search_ids
+
+    with captions.CaptionIndex(idx_path, lexicon, documents) as index:
         # Unigram search
-        r = inv_index.search('THE')
-        for i, d in enumerate(r.documents):
-            assert d.count == len(list(d.locations))
-        assert i + 1 == r.count
+        test_search_and_contains(['THE'])
+        test_search_and_contains(['UNITED'])
+        test_search_and_contains(['STATES'])
+        test_search_and_contains(['AND'])
 
         # Bigram search
-        r = inv_index.search('UNITED STATES')
-        for d in r.documents:
-            for l in d.locations:
-                assert l.max_index - l.min_index == 1
+        test_search_and_contains(['UNITED', 'STATES'])
+        test_search_and_contains(['UNITED', 'KINGDOM'])
 
         # N-gram search
-        r = inv_index.search('UNITED STATES OF AMERICA')
-        for d in r.documents:
-            for l in d.locations:
-                assert l.max_index - l.min_index == 3
+        test_search_and_contains(['UNITED', 'STATES', 'OF', 'AMERICA'])
 
 
 def test_token_data():
     idx_dir = os.path.join(TMP_DIR, TEST_INDEX_SUBDIR)
-    data_path = os.path.join(idx_dir, 'docs.bin')
+    idx_path = os.path.join(idx_dir, 'index.bin')
     documents, lexicon = _get_docs_and_lex(idx_dir)
-    with captions.DocumentData(data_path, lexicon, documents) as doc_data:
+    with captions.CaptionIndex(idx_path, lexicon, documents) as index:
         for i in range(len(documents)):
-            for t in doc_data.tokens(i):
-                pass
-            for t in doc_data.tokens(i, decode=True):
-                pass
+            for t in index.tokens(i):
+                lexicon.decode(t)
 
 
-def test_time_index():
+def test_intervals_data():
     idx_dir = os.path.join(TMP_DIR, TEST_INDEX_SUBDIR)
-    data_path = os.path.join(idx_dir, 'docs.bin')
+    idx_path = os.path.join(idx_dir, 'index.bin')
     documents, lexicon = _get_docs_and_lex(idx_dir)
-    with captions.DocumentData(data_path, lexicon, documents) as doc_data:
+    with captions.CaptionIndex(idx_path, lexicon, documents) as index:
         for i in range(len(documents)):
-            for interval in doc_data.token_intervals(i, 0, 2 ** 16):
-                for t in interval.tokens:
-                    pass
-            for interval in doc_data.token_intervals(i, 0, 0):
-                for t in interval.tokens:
-                    pass
-            for interval in doc_data.token_intervals(i, 0, 2 ** 16,
-                                                     decode=True):
-                for t in interval.tokens:
-                    pass
-            for interval in doc_data.token_intervals(i, 0, 0, decode=True):
-                for t in interval.tokens:
-                    pass
+            assert len(index.intervals(i, 0, 0)) == 0
+            for posting in index.intervals(i, 0, 2 ** 16):
+                pass
 
 
 def test_util_window():
@@ -161,11 +157,9 @@ def test_topic_search():
     idx_dir = os.path.join(TMP_DIR, TEST_INDEX_SUBDIR)
     idx_path = os.path.join(idx_dir, 'index.bin')
     documents, lexicon = _get_docs_and_lex(idx_dir)
-    with captions.InvertedIndex(idx_path, lexicon, documents) as inv_index:
-        r = util.topic_search(
-            ['UNITED STATES', 'AMERICA', 'US'], inv_index)
-        for i, d in enumerate(r.documents):
-            assert d.count == len(list(d.locations))
+    with captions.CaptionIndex(idx_path, lexicon, documents) as index:
+        for d in util.topic_search(['UNITED STATES', 'AMERICA', 'US'], index):
+            assert len(d.postings) > 0
 
 
 def test_script_scan():
@@ -189,7 +183,7 @@ def test_script_build_metadata():
             meta_path, documents,
             build_metadata.NLPTagFormat()) as metadata:
         for d in documents:
-            assert d.meta_data_offset >= 0
+            assert len(metadata.metadata(d, 0, 0)) == 0
             for tag in metadata.metadata(d):
                 assert isinstance(tag, str)
 

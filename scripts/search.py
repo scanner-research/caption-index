@@ -9,7 +9,7 @@ import os
 import time
 import traceback
 
-from captions import tokenize, Lexicon, Documents, InvertedIndex, DocumentData
+from captions import tokenize, Lexicon, Documents, CaptionIndex
 from captions.util import topic_search
 
 
@@ -39,7 +39,7 @@ def format_seconds(s):
         hours, minutes, seconds, millis)
 
 
-def run_search(query, documents, index, document_data, context_size, silent):
+def run_search(query, documents, lexicon, index, context_size, silent):
     start_time = time.time()
 
     if ',' not in query:
@@ -60,53 +60,48 @@ def run_search(query, documents, index, document_data, context_size, silent):
 
     total_seconds = 0
     occurence_count = 0
-    i = 0
-    for i, d in enumerate(result.documents):
+    doc_count = 0
+    for i, d in enumerate(result):
         if not silent:
             print(documents[d.id].name)
-        occurence_count += d.count
-        for j, e in enumerate(d.locations):
-            total_seconds += e.end - e.start
+        occurence_count += len(d.postings)
+        for j, p in enumerate(d.postings):
+            total_seconds += p.end - p.start
             if not silent:
                 if context_size > 0:
-                    context = ' '.join(document_data.tokens(
-                        d.id,
-                        start_pos=max(e.min_index - context_size, 0),
-                        end_pos=e.max_index + context_size,
-                        decode=True
-                    ))
+                    start_idx = max(p.idx - context_size, 0)
+                    context = ' '.join([
+                        lexicon.decode(t)
+                        for t in index.tokens(
+                            d.id, index=start_idx,
+                            count=p.idx + p.len + context_size - start_idx)
+                    ])
                 else:
                     context = query
 
                 print(' {}-- [{} - {}] [position: {}] "{}"'.format(
-                    '\\' if j == d.count - 1 else '|',
-                    format_seconds(e.start), format_seconds(e.end),
-                    e.min_index
-                        if e.min_index == e.max_index
-                        else '{}-{}'.format(e.min_index, e.max_index),
+                    '\\' if j == len(d.postings) - 1 else '|',
+                    format_seconds(p.start), format_seconds(p.end),
+                    p.idx if p.len == 1 else '{}-{}'.format(p.idx, p.idx + p.len),
                     context))
-
-    if result.count is not None:
-        assert result.count == i + 1
+        doc_count += 1
     print('Found {} documents, {} occurences, spanning {:d}s in {:d}ms'.format(
-          i, occurence_count, int(total_seconds),
+          doc_count, occurence_count, int(total_seconds),
           int((time.time() - start_time) * 1000)))
 
 
 def main(index_dir, query, silent, context_size):
     doc_path = os.path.join(index_dir, 'docs.list')
-    data_path = os.path.join(index_dir, 'docs.bin')
     lex_path = os.path.join(index_dir, 'words.lex')
     idx_path = os.path.join(index_dir, 'index.bin')
 
     documents = Documents.load(doc_path)
     lexicon = Lexicon.load(lex_path)
 
-    with InvertedIndex(idx_path, lexicon, documents) as index, \
-            DocumentData(data_path, lexicon, documents) as document_data:
+    with CaptionIndex(idx_path, lexicon, documents) as index:
         if len(query) > 0:
             print('Query: ', query)
-            run_search(' '.join(query), documents, index, document_data,
+            run_search(' '.join(query), documents, lexicon, index,
                        context_size, silent)
         else:
             print('Enter a phrase or topic (phrases separated by commas):')
@@ -119,7 +114,7 @@ def main(index_dir, query, silent, context_size):
                 query = query.strip()
                 if len(query) > 0:
                     try:
-                        run_search(query, documents, index, document_data,
+                        run_search(query, documents, lexicon, index,
                                    context_size, silent)
                     except Exception:
                         traceback.print_exc()

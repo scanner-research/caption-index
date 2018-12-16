@@ -2,8 +2,8 @@
 
 Simple library for building position, time, and inverted indexes on .srt files
 for quick indexing and n-gram search. The goal of this module is provide
-reasonably efficient iterators over caption/text files for analytics code in
-Python, while limiting resident memory usage and IO/computational latency.
+reasonably efficient iterators over caption/text files for analytics code,
+while limiting resident memory usage and IO/computational latency.
 
 ## Install
 

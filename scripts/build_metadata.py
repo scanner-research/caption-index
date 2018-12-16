@@ -12,7 +12,7 @@ from collections import deque
 from spacy.tokens import Doc
 from tqdm import tqdm
 
-from captions import Lexicon, Documents, DocumentData, MetadataFormat
+from captions import Lexicon, Documents, CaptionIndex, MetadataFormat
 
 
 NLP = spacy.load('en', disable=['ner', 'parser'])
@@ -48,8 +48,9 @@ class POSTag(object):
         return POS_TAGS_MAP.get(s, POS_UNKNOWN_ID)
 
     @staticmethod
-    def decode(i):
-        assert isinstance(i, int)
+    def decode(b):
+        assert isinstance(b, bytes)
+        i = b[0]
         if i < 0 or i >= len(POS_TAGS):
             return 'XX'     # unknown
         return POS_TAGS[i]
@@ -73,12 +74,13 @@ def write_doc_metadata(d, tokens, out_file):
             traceback.print_exc()
             print('Failed to generate tags: {}'.format(d.name))
             tags = [POS_UNKNOWN_TAG] * len(tokens)
+        out_file.write(MetadataFormat.header(d.id, len(tags)))
         out_file.write(bytes(POSTag.encode(t) for t in tags))
 
 
 def main(index_dir, lowercase):
     doc_path = os.path.join(index_dir, 'docs.list')
-    data_path = os.path.join(index_dir, 'docs.bin')
+    index_path = os.path.join(index_dir, 'index.bin')
     lex_path = os.path.join(index_dir, 'words.lex')
     meta_path = os.path.join(index_dir, 'meta.bin')
 
@@ -88,22 +90,13 @@ def main(index_dir, lowercase):
     documents = Documents.load(doc_path)
     lexicon = Lexicon.load(lex_path)
 
-    metadata_offsets = deque()
-    with DocumentData(data_path, lexicon, documents) as docdata, \
+    with CaptionIndex(index_path, lexicon, documents) as index, \
             open(meta_path, 'wb') as f:
         for d in tqdm(documents, desc='Writing metadata'):
-            metadata_offsets.append(f.tell())
-            doc_tokens = list(docdata.tokens(d, decode=True))
+            doc_tokens = [lexicon.decode(t) for t in index.tokens(d)]
             if lowercase:
                 doc_tokens = [t.lower() for t in doc_tokens]
             write_doc_metadata(d, doc_tokens, f)
-
-    print('Saving documents with metadata offsets')
-    documents = Documents([
-        d._replace(meta_data_offset=ofs)
-        for d, ofs in zip(documents, metadata_offsets)
-    ])
-    documents.store(doc_path)
 
 
 if __name__ == '__main__':

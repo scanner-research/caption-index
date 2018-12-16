@@ -10,14 +10,15 @@ import sys
 import os
 from collections import deque, Counter
 from multiprocessing import Pool
+from typing import Iterable, List
 
-from .index import Lexicon, InvertedIndex, DocumentData, NgramFrequency
+from .index import Lexicon, CaptionIndex, NgramFrequency
 
 
 VERBOSE = False
 
 
-def window(tokens, n, subwindows=False):
+def window(tokens: Iterable, n: int, subwindows=False):
     """Takes an iterable words and returns a windowed iterator"""
     buffer = deque()
     for t in tokens:
@@ -36,80 +37,80 @@ def window(tokens, n, subwindows=False):
             buffer.popleft()
 
 
-def frequent_words(lexicon, percentile=99.7):
-    assert isinstance(lexicon, Lexicon)
+def frequent_words(lexicon: Lexicon, percentile=99.7) -> List[Lexicon.Word]:
     threshold = np.percentile([w.count for w in lexicon], percentile)
     return [w for w in lexicon if w.count >= threshold]
 
 
-def _dilate_location_results(locations, window):
-    for l in locations:
-        yield l._replace(
-            start=max(l.start - window, 0), end=l.end + window)
+def _dilate_postings(postings: Iterable[CaptionIndex.Posting], window: int,
+                     duration: float) -> Iterable[CaptionIndex.Posting]:
+    return [p._replace(
+        start=max(p.start - window, 0), end=min(p.end + window, duration)
+    ) for p in postings]
 
 
-def _deoverlap_location_results(location_results):
-    new_location_results = deque()
-    curr_lr = None
-    for lr in location_results:
-        if curr_lr is None:
-            curr_lr = lr
-        elif curr_lr.end >= lr.start:
-            if VERBOSE and curr_lr.start <= lr.start:
-                print('{} > {}'.format(curr_lr.start, lr.start),
+def _deoverlap_postings(postings: Iterable[CaptionIndex.Posting]) -> Iterable[CaptionIndex.Posting]:
+    new_postings = deque()
+    curr_posting = None
+    for p in postings:
+        if curr_posting is None:
+            curr_posting = p
+        elif curr_posting.end >= p.start:
+            if VERBOSE and curr_posting.start <= p.start:
+                print('{} > {}'.format(curr_posting.start, p.start),
                       file=sys.stderr)
-            curr_lr = curr_lr._replace(
-                end=max(lr.end, curr_lr.end),
-                min_index=min(lr.min_index, curr_lr.min_index),
-                max_index=max(lr.max_index, curr_lr.max_index))
+            min_idx = min(p.idx, curr_posting.idx)
+            max_idx = max(p.idx + p.len, curr_posting.idx + curr_posting.len)
+            curr_posting = curr_posting._replace(
+                end=max(p.end, curr_posting.end), idx=min_idx,
+                len=max_idx - min_idx)
         else:
-            new_location_results.append(curr_lr)
-            curr_lr = lr
-    if curr_lr is not None:
-        new_location_results.append(curr_lr)
-    return new_location_results
+            new_postings.append(curr_posting)
+            curr_posting = p
+    if curr_posting is not None:
+        new_postings.append(curr_posting)
+    return new_postings
 
 
-def _dilate_document_results(document_results, window):
+def _dilate_search_results(index: CaptionIndex,
+                           results: Iterable[CaptionIndex.Document],
+                           window: int) -> Iterable[CaptionIndex.Document]:
     """
-    For each document result, add/subtract window to the end/start time of
-    each location result
+    For each document's result, add/subtract window to the end/start time of
+    each posting.
     """
-    for dr in document_results:
-        location_results = _deoverlap_location_results(
-            _dilate_location_results(dr.locations, window))
-        yield dr._replace(
-            count=len(location_results),
-            locations=iter(location_results))
+    for d in results:
+        duration = index.document_duration(d.id)
+        postings = _deoverlap_postings(
+            _dilate_postings(d.postings, window, duration))
+        yield d._replace(postings=postings)
 
 
-def _union_location_results(location_results):
+def _union_postings(postings_lists):
     """
-    Merge several iterators of location_results by order of start
+    Merge several lists of postings by order of start time.
     """
+    result = []
     pq = []
-    for i, lr in enumerate(location_results):
-        try:
-            lr_head = next(lr)
-            pq.append((lr_head.start, i, lr_head, lr))
-        except StopIteration:
-            pass
+    for i, ps in enumerate(postings_lists):
+        assert isinstance(ps, deque)
+        ps_head = ps.popleft()
+        pq.append((ps_head.start, i, ps_head, ps))
     heapq.heapify(pq)
 
     while len(pq) > 0:
-        _, i, lr_head, lr = heapq.heappop(pq)
-        yield lr_head
-        try:
-            lr_head = next(lr)
-            heapq.heappush(pq, (lr_head.start, i, lr_head, lr))
-        except StopIteration:
-            pass
+        _, i, ps_head, ps = heapq.heappop(pq)
+        result.append(ps_head)
+        if len(ps) > 0:
+            ps_head = ps.popleft()
+            heapq.heappush(pq, (ps_head.start, i, ps_head, ps))
+    return result
 
 
-def _union_document_results(document_results):
+def _union_search_results(document_results):
     """
-    Merge several iterators of document results and their locations,
-    deoverlapping as necessary
+    Merge several iterators of document results and their postings,
+    deoverlapping as necessary.
     """
     pq = []
     for i, dr in enumerate(document_results):
@@ -122,11 +123,11 @@ def _union_document_results(document_results):
 
     while len(pq) > 0:
         curr_doc_head = pq[0][2]
-        curr_doc_loc_results = []
+        curr_doc_postings_lists = []
         while len(pq) > 0:
             if pq[0][0] == curr_doc_head.id:
                 _, i, dr_head, dr = heapq.heappop(pq)
-                curr_doc_loc_results.append(dr_head.locations)
+                curr_doc_postings_lists.append(dr_head.postings)
                 try:
                     dr_head = next(dr)
                     heapq.heappush(pq, (dr_head.id, i, dr_head, dr))
@@ -135,50 +136,42 @@ def _union_document_results(document_results):
             else:
                 break
 
-        if len(curr_doc_loc_results) == 1:
+        if len(curr_doc_postings_lists) == 1:
             yield curr_doc_head
         else:
-            new_location_results = _deoverlap_location_results(
-                _union_location_results(curr_doc_loc_results))
-            yield curr_doc_head._replace(
-                count=len(new_location_results),
-                locations=iter(new_location_results))
+            new_postings = _deoverlap_postings(
+                _union_postings(curr_doc_postings_lists))
+            yield curr_doc_head._replace(postings=new_postings)
 
 
-def topic_search(phrases, inverted_index, window_size=30):
+def topic_search(phrases: List, index: CaptionIndex, window_size=30):
     """
     Search for time segments where any of the phrases occur with time windows
     dilated by window size seconds.
     """
-    assert isinstance(inverted_index, InvertedIndex)
+    assert isinstance(index, CaptionIndex)
     assert isinstance(phrases, list)
     results = []
     for phrase in phrases:
         try:
-            result = inverted_index.search(phrase)
-            results.append(result)
+            result = index.search(phrase)
+            results.append(_dilate_search_results(index, result, window_size))
         except (KeyError, IndexError, ValueError):
             pass
-
-    document_results = deque()
-    for r in results:
-        document_results.append(
-            _dilate_document_results(r.documents, window_size))
-    return InvertedIndex.Result(
-        count=None, documents=_union_document_results(document_results))
+    return _union_search_results(results)
 
 
-_DOCUMENT_DATA = None
+_INDEX = None
 _NGRAM_FREQUENCY = None
 
 
 def _pmi_worker(batch, n):
     length_totals = [0] * n
     ngram_counts = Counter()
-    for doc_id, locs in batch:
-        for start, end in locs:
-            start_pos = _DOCUMENT_DATA.time_to_position(doc_id, start)
-            end_pos = _DOCUMENT_DATA.time_to_position(doc_id, end)
+    for doc_id, postings in batch:
+        for start, end in postings:
+            start_pos = _INDEX.position(doc_id, start)
+            end_pos = _INDEX.position(doc_id, end)
 
             # if VERBOSE:
             #     if start_pos <= lr.min_index:
@@ -188,7 +181,7 @@ def _pmi_worker(batch, n):
             #         print('Bad end idx: {} < {}'.format(end_pos, lr.max_index),
             #               file=sys.stderr)
 
-            for ngram in window(_DOCUMENT_DATA.tokens(doc_id, start_pos,
+            for ngram in window(_INDEX.tokens(doc_id, start_pos,
                                 end_pos), n, True):
                 if ngram in _NGRAM_FREQUENCY:
                     ngram_counts[ngram] += 1
@@ -199,30 +192,28 @@ def _pmi_worker(batch, n):
 DEFAULT_WORKERS = os.cpu_count()
 
 
-def pmi_search(phrases, inverted_index, document_data, ngram_frequency,
-               n, window_size=30, workers=DEFAULT_WORKERS, batch_size=10000):
+def pmi_search(phrases: List, index: CaptionIndex,
+               ngram_frequency: NgramFrequency, n: int,
+               window_size=30, workers=DEFAULT_WORKERS, batch_size=10000):
     """
     Get ngrams that occur in the context of the query phrases.
     """
-    assert isinstance(inverted_index, InvertedIndex)
-    assert isinstance(document_data, DocumentData)
-    assert isinstance(ngram_frequency, NgramFrequency)
-    intervals = topic_search(phrases, inverted_index, window_size)
+    intervals = topic_search(phrases, index, window_size)
 
     length_totals = [0] * n
     ngram_scores = Counter()
 
-    global _DOCUMENT_DATA, _NGRAM_FREQUENCY
-    _DOCUMENT_DATA = document_data
+    global _INDEX, _NGRAM_FREQUENCY
+    _INDEX = index
     _NGRAM_FREQUENCY = ngram_frequency
     with Pool(processes=workers) as pool:
         batch = deque()
         results = deque()
-        for dr in intervals.documents:
-            locations = deque()
-            for lr in dr.locations:
-                locations.append((lr.start, lr.end))
-            batch.append((dr.id, locations))
+        for dr in intervals:
+            postings = deque()
+            for p in dr.postings:
+                postings.append((p.start, p.end))
+            batch.append((dr.id, postings))
 
             if len(batch) == batch_size:
                 results.append(pool.apply_async(_pmi_worker, (batch, n)))

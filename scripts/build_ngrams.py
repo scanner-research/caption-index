@@ -7,13 +7,12 @@ Count ngrams in all of the documents
 import argparse
 import msgpack
 import os
-import sys
 import time
 from tqdm import tqdm
 from collections import deque, Counter
 from multiprocessing import Pool
 
-from captions import Lexicon, Documents, DocumentData
+from captions import Lexicon, Documents, CaptionIndex
 from captions.util import window
 
 DEFAULT_WORKERS = os.cpu_count()
@@ -40,7 +39,7 @@ def get_args():
 
 
 LEXICON = None
-DOCUMENT_DATA = None
+INDEX = None
 NGRAM_COUNTS = None
 
 
@@ -58,7 +57,7 @@ def batch_count_ngrams(base_doc, batch_size, n):
     counts = Counter()
     total = 0
     for i in range(base_doc, base_doc + batch_size):
-        for t in window(DOCUMENT_DATA.tokens(i), n):
+        for t in window(INDEX.tokens(i), n):
             total += 1
             if t[1:] in NGRAM_COUNTS and t[1-n:] in NGRAM_COUNTS:
                 counts[t] += 1
@@ -95,7 +94,7 @@ def single_pass_count_ngrams(n, limit, workers, batch_size=1000):
 
 def main(index_dir, n, min_count, workers, limit):
     doc_path = os.path.join(index_dir, 'docs.list')
-    data_path = os.path.join(index_dir, 'docs.bin')
+    index_path = os.path.join(index_dir, 'index.bin')
     lex_path = os.path.join(index_dir, 'words.lex')
     out_path = os.path.join(index_dir, 'ngrams.bin')
 
@@ -105,12 +104,12 @@ def main(index_dir, n, min_count, workers, limit):
     documents = Documents.load(doc_path)
     lexicon = Lexicon.load(lex_path)
 
-    global DOCUMENT_DATA, NGRAM_COUNTS
+    global INDEX, NGRAM_COUNTS
     NGRAM_COUNTS, unigram_total = filter_lexicon(lexicon, min_count)
     ngram_total = [unigram_total]
 
-    with DocumentData(data_path, lexicon, documents) as docdata:
-        DOCUMENT_DATA = docdata
+    with CaptionIndex(index_path, lexicon, documents) as index:
+        INDEX = index
 
         if limit is None:
             limit = len(documents)

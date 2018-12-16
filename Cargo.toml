@@ -1,0 +1,15 @@
+[package]
+name = "rs-captions"
+version = "0.2.0"
+authors = ["James Hong <james.hong@cs.stanford.edu>"]
+
+[lib]
+name = "rs_captions"
+crate-type = ["cdylib"]
+
+[dependencies]
+memmap = "0.7.0"
+byteorder = "1.2.7"
+rayon = "1.0.3"
+rand = "0.6.1"
+pyo3 = { version = "0.5.0", features = ["extension-module"] }

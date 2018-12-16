@@ -8,6 +8,9 @@ import spacy
 import types
 from abc import ABC, abstractmethod, abstractproperty
 from collections import namedtuple, deque
+from typing import Dict, Iterable, List, Set, Tuple
+
+from .rs_captions import RsCaptionIndex, RsMetadataIndex
 
 
 MODEL = 'en'
@@ -26,9 +29,8 @@ class Lexicon(object):
     Word = namedtuple(
         'Word', [
             'id',       # Token id
-            'token',    # String representation
+            'token',    # String representations
             'count',    # Number of occurrences
-            'offset'    # Offset into inverted index file
         ])
 
     def __init__(self, words):
@@ -63,7 +65,13 @@ class Lexicon(object):
     def __len__(self):
         return len(self._words)
 
-    def store(self, path):
+    def decode(self, key):
+        try:
+            return self.__getitem__(key).token
+        except:
+            return Lexicon.UNKNOWN_TOKEN
+
+    def store(self, path: str):
         prev_w = None
         for w in self._words:
             if prev_w:
@@ -73,12 +81,12 @@ class Lexicon(object):
 
         with open(path, 'wb') as f:
             msgpack.dump([
-                (w.id, w.token, w.count, w.offset)
+                (w.id, w.token, w.count)
                 for w in self._words
             ], f, use_bin_type=True)
 
     @staticmethod
-    def load(path):
+    def load(path: str):
         with open(path, 'rb') as f:
             words = [Lexicon.Word(*x) for x in msgpack.load(f, raw=False)]
         return Lexicon(words)
@@ -87,16 +95,7 @@ class Lexicon(object):
 class Documents(object):
     """A mapping from document id to name, and vice versa"""
 
-    Document = namedtuple(
-        'Document', [
-            'id',
-            'name',                 # File name
-            'length',               # Number of tokens in file
-            'duration',             # Duration in seconds
-            'time_index_offset',    # Time index offset in binary docs file
-            'token_data_offset',    # Token data offset in binary docs file
-            'meta_data_offset'      # Offset in the metadata file
-        ])
+    Document = namedtuple('Document', ['id', 'name'])
 
     def __init__(self, docs):
         """List of Documents, where index is the id"""
@@ -129,35 +128,19 @@ class Documents(object):
     def __len__(self):
         return len(self._docs)
 
-    def store(self, path):
+    def store(self, path: str):
         with open(path, 'w') as f:
             for d in self._docs:
-                f.write('\t'.join([
-                    d.name,
-                    str(d.length),
-                    str(d.duration),
-                    str(d.time_index_offset),
-                    str(d.token_data_offset),
-                    str(d.meta_data_offset)
-                ]))
+                f.write('\t'.join([str(d.id), d.name]))
                 f.write('\n')
 
     @staticmethod
     def load(path):
         documents = []
         with open(path, 'r') as f:
-            for i, line in enumerate(f):
-                name, length, duration, ti_ofs, td_ofs, md_ofs = \
-                    line.split('\t', 5)
-                documents.append(Documents.Document(
-                    id=i,
-                    name=name,
-                    length=int(length),
-                    duration=float(duration),
-                    time_index_offset=int(ti_ofs),
-                    token_data_offset=int(td_ofs),
-                    meta_data_offset=int(md_ofs)
-                ))
+            for line in f:
+                i, name = line.strip().split('\t', 1)
+                documents.append(Documents.Document(id=int(i), name=name))
         return Documents(documents)
 
 
@@ -165,7 +148,8 @@ class BinaryFormat(object):
     """
     Binary data formatter for writing and reading the indexes
 
-    Supports two data types:
+    Supports 4 data types:
+        - u32
         - time interval
         - datum
         - byte
@@ -173,15 +157,13 @@ class BinaryFormat(object):
 
     Config = namedtuple(
         'Config', [
-            'endian',
             'start_time_bytes',     # Number of bytes to encode start times
             'end_time_bytes',       # Number of bytes to encode end - start
             'datum_bytes',          # Number of bytes to encode other data
         ])
 
     def __init__(self, config):
-        assert config.endian in ['big', 'little']
-        self._endian = config.endian
+        self._endian = 'little'
 
         assert config.start_time_bytes > 0
         assert config.end_time_bytes > 0
@@ -197,6 +179,10 @@ class BinaryFormat(object):
         self._max_time_interval = (
             2 ** (8 * (config.start_time_bytes - config.end_time_bytes)) - 1)
         self._max_datum_value = 2 ** (config.datum_bytes * 8) - 1
+
+    @property
+    def u32_bytes(self):
+        return 4
 
     @property
     def time_interval_bytes(self):
@@ -216,6 +202,10 @@ class BinaryFormat(object):
         """Largest value that can be serialized"""
         return self._max_datum_value
 
+    def encode_u32(self, data):
+        assert isinstance(data, int)
+        return (data).to_bytes(4, self._endian)
+
     def encode_time_interval(self, start, end):
         assert isinstance(start, int)
         assert isinstance(end, int)
@@ -229,12 +219,6 @@ class BinaryFormat(object):
             (start).to_bytes(self._start_time_bytes, self._endian) +
             (diff).to_bytes(self._end_time_bytes, self._endian))
 
-    def decode_time_interval(self, s):
-        assert len(s) == self.time_interval_bytes
-        start = int.from_bytes(s[:self._start_time_bytes], self._endian)
-        diff = int.from_bytes(s[self._start_time_bytes:], self._endian)
-        return start, start + diff
-
     def encode_datum(self, i):
         assert isinstance(i, int)
         if i < 0:
@@ -244,7 +228,17 @@ class BinaryFormat(object):
                              i, self._max_datum_value))
         return (i).to_bytes(self._datum_bytes, self._endian)
 
-    def decode_datum(self, s):
+    def _decode_u32(self, s):
+        assert len(s) == 4, '{} is the wrong length'.format(len(s))
+        return int.from_bytes(s, self._endian)
+
+    def _decode_time_interval(self, s):
+        assert len(s) == self.time_interval_bytes
+        start = int.from_bytes(s[:self._start_time_bytes], self._endian)
+        diff = int.from_bytes(s[self._start_time_bytes:], self._endian)
+        return start, start + diff
+
+    def _decode_datum(self, s):
         assert len(s) == self._datum_bytes, \
             '{} is the wrong length'.format(len(s))
         return int.from_bytes(s, self._endian)
@@ -253,25 +247,52 @@ class BinaryFormat(object):
     def default():
         return BinaryFormat(
             BinaryFormat.Config(
-                endian='little',
                 start_time_bytes=4,
                 end_time_bytes=2,
                 datum_bytes=3))
 
 
-def _millis_to_seconds(t):
-    return t / 1000
-
-
-class _MemoryMappedFile(object):
+class CaptionIndex(object):
     """
-    Base class for an object backed by a mmapped file
+    Interface to a binary encoded index file.
     """
 
-    def __init__(self, path):
-        assert isinstance(path, str)
-        self._f = open(path, 'rb')
-        self._mmap = mmap.mmap(self._f.fileno(), 0, access=mmap.ACCESS_READ)
+    Posting = namedtuple(
+        'Posting', [
+            'start',        # Start time in seconds
+            'end',          # End time in seconds
+            'idx',          # Start position in document
+            'len',          # Number of tokens
+        ])
+
+    Document = namedtuple(
+        'Document', [
+            'id',           # Document ID
+            'postings'      # List of locations
+        ])
+
+    def __init__(self, path: str, lexicon: Lexicon, documents: Documents,
+                 binary_format=None, debug=False):
+        assert isinstance(lexicon, Lexicon)
+        assert isinstance(documents, Documents)
+        self._lexicon = lexicon
+        self._documents = documents
+
+        if binary_format is None:
+            binary_format = BinaryFormat.default()
+
+        self._rs_index = RsCaptionIndex(
+            path, datum_size=binary_format.datum_bytes,
+            start_time_size=binary_format._start_time_bytes,
+            end_time_size=binary_format._end_time_bytes,
+            debug=debug)
+
+    def __require_open_index(f):
+        def wrapper(self, *args, **kwargs):
+            if self._rs_index is None:
+                raise ValueError('I/O on closed CaptionIndex')
+            return f(self, *args, **kwargs)
+        return wrapper
 
     def __enter__(self):
         return self
@@ -280,91 +301,37 @@ class _MemoryMappedFile(object):
         self.close()
 
     def close(self):
-        if self._f is not None:
-            self._mmap.close()
-            self._mmap = None
-            self._f.close()
-            self._f = None
+        self._rs_index = None
 
-    def _byte_at(self, i):
-        return self._mmap[i]
-
-    def _bytes_at(self, i, n):
-        return self._mmap[i:i + n]
-
-
-class _BinaryFormatFile(_MemoryMappedFile):
-    """
-    Base class for an object backed by a mmapped file
-    """
-
-    def __init__(self, path, binary_format):
-        super(_BinaryFormatFile, self).__init__(path)
-        if binary_format is not None:
-            assert isinstance(binary_format, BinaryFormat)
-            self._bin_fmt = binary_format
+    def __get_document_id(self, doc):
+        if isinstance(doc, Documents.Document):
+            return doc.id
         else:
-            self._bin_fmt = BinaryFormat.default()
+            return self._documents[doc].id
 
-    def _datum_at(self, i):
-        return self._bin_fmt.decode_datum(
-            self._bytes_at(i, self._bin_fmt.datum_bytes))
+    def __get_document_ids(self, docs):
+        return [] if docs is None else [
+            self.__get_document_id(d) for d in docs]
 
-    def _time_int_at(self, i):
-        return self._bin_fmt.decode_time_interval(
-            self._bytes_at(i, self._bin_fmt.time_interval_bytes))
+    def __get_word_id(self, word):
+        if isinstance(word, Lexicon.Word):
+            return word.id
+        else:
+            return self._lexicon[word].id
 
+    @__require_open_index
+    def document_length(self, doc):
+        """Get the length of a document in tokens"""
+        doc_id = self.__get_document_id(doc)
+        return self._rs_index.document_length(doc_id)[0]
 
-class InvertedIndex(_BinaryFormatFile):
-    """
-    Interface to a binary encoded inverted index file
+    @__require_open_index
+    def document_duration(self, doc):
+        """Get the duration of a document in seconds"""
+        doc_id = self.__get_document_id(doc)
+        return self._rs_index.document_length(doc_id)[1]
 
-    The format of the file is (field, type):
-
-        token_id: datum
-        document_count: datum
-        |-- document_id: datum
-        |-- location_count: datum
-        |   |-- location_idx: datum
-        |   |-- start, end: time_interval
-        |   |-- ... (more locations)
-        |-- ... (more documents)
-
-    For O(1) indexing, the Lexicon contains a map of tokens to their binary
-    offsets in this file.
-    """
-
-    LocationResult = namedtuple(
-        'LocationResult', [
-            'min_index',    # Start position in document
-            'max_index',    # End position in document
-            'start',        # Start time in seconds
-            'end'           # End time in seconds
-        ])
-
-    DocumentResult = namedtuple(
-        'DocumentResult', [
-            'id',           # Document ID
-            'count',        # Number of locations
-            'locations'     # Generator of locations
-        ])
-
-    Result = namedtuple(
-        'Result', [
-            'count',        # Count of documents (None if this count is not
-                            # available)
-            'documents'     # Generator of documents
-        ])
-
-    def __init__(self, path, lexicon, documents, binary_format=None):
-        super(InvertedIndex, self).__init__(path, binary_format)
-
-        assert isinstance(lexicon, Lexicon)
-        assert isinstance(documents, Documents)
-        self._lexicon = lexicon
-        self._documents = documents
-
-    def search(self, text):
+    def __tokenize_text(self, text):
         if isinstance(text, str):
             tokens = list(tokenize(text.strip()))
             if len(tokens) == 0:
@@ -382,278 +349,58 @@ class InvertedIndex(_BinaryFormatFile):
                 raise ValueError('No words in input')
         else:
             raise TypeError('Unsupported type: {}'.format(type(text)))
-        return self.ngram_search(*tokens)
+        return tokens
 
-    # TODO: there are more optimized ways to do this with query planning
-    def ngram_search(self, first_word, *other_words):
-        partial_result = self.unigram_search(first_word)
-        for i, next_word in enumerate(other_words):
-            next_result = self.unigram_search(next_word)
-            partial_result = InvertedIndex.Result(
-                count=None,
-                documents=InvertedIndex._merge_results(
-                    partial_result, next_result, i + 1))
-        return partial_result
+    def search(self, text, documents=None) -> Iterable['CaptionIndex.Document']:
+        tokens = self.__tokenize_text(text)
+        return self.ngram_search(*tokens, documents=documents)
 
-    def _get_locations(self, offset, count):
-        for _ in range(count):
-            index = self._datum_at(offset)
-            offset += self._bin_fmt.datum_bytes
-            start, end = self._time_int_at(offset)
-            offset += self._bin_fmt.time_interval_bytes
-            yield InvertedIndex.LocationResult(
-                index, index,
-                _millis_to_seconds(start),
-                _millis_to_seconds(end))
+    def __unpack_rs_search(self, result):
+        for doc_id, postings in result:
+            yield CaptionIndex.Document(
+                id=doc_id, postings=[
+                    CaptionIndex.Posting(*p) for p in postings])
 
-    def _get_documents(self, offset, count):
-        prev_doc_id = None
-        for _ in range(count):
-            doc_id = self._datum_at(offset)
-            assert doc_id < len(self._documents), \
-                'Invalid document id: {}'.format(doc_id)
-            assert prev_doc_id is None or doc_id > prev_doc_id, \
-                'Uh oh... document ids should be ascending, but {} <= {}'.format(
-                    doc_id, prev_doc_id)
-            offset += self._bin_fmt.datum_bytes
+    @__require_open_index
+    def ngram_search(self, first_word, *other_words, documents=None) -> Iterable['CaptionIndex.Document']:
+        doc_ids = self.__get_document_ids(documents)
+        word_ids = [self.__get_word_id(w) for w in [first_word, *other_words]]
+        return self.__unpack_rs_search(
+            self._rs_index.ngram_search(word_ids, doc_ids))
 
-            posting_count = self._datum_at(offset)
-            assert posting_count > 0, 'Expected at least one posting'
-            offset += self._bin_fmt.datum_bytes
+    def contains(self, text, documents=None) -> Set[int]:
+        tokens = self.__tokenize_text(text)
+        return self.ngram_contains(*tokens, documents=documents)
 
-            yield InvertedIndex.DocumentResult(
-                id=doc_id, count=posting_count,
-                locations=self._get_locations(offset, posting_count))
-            offset += posting_count * (
-                self._bin_fmt.datum_bytes + self._bin_fmt.time_interval_bytes)
-            prev_doc_id = doc_id
+    @__require_open_index
+    def ngram_contains(self, first_word, *other_words, documents=None) -> Set[int]:
+        doc_ids = self.__get_document_ids(documents)
+        word_ids = [self.__get_word_id(w) for w in [first_word, *other_words]]
+        return set(self._rs_index.ngram_contains(word_ids, doc_ids))
 
-    def unigram_search(self, word):
-        if isinstance(word, Lexicon.Word):
-            word = self._lexicon[word.id]
-        else:
-            word = self._lexicon[word]
+    @__require_open_index
+    def tokens(self, doc, index=0, count=2 ** 31) -> List[int]:
+        doc_id = self.__get_document_id(doc)
+        return self._rs_index.tokens(doc_id, index, count)
 
-        if word.offset < 0:
-            return InvertedIndex.Result(count=0, documents=iter(()))
-        assert word.offset < self._mmap.size(), \
-            'Offset exceeds file length: {} > {}'.format(
-            word.offset, self._mmap.size())
+    @__require_open_index
+    def intervals(self, doc, start_time=0., end_time=float('inf')) -> Iterable['CaptionIndex.Posting']:
+        doc_id = self.__get_document_id(doc)
+        return [
+            CaptionIndex.Posting(*p)
+            for p in self._rs_index.intervals(doc_id, start_time, end_time)]
 
-        curr_offset = word.offset
-
-        word_id = self._datum_at(curr_offset)
-        assert word_id == word.id, \
-            'Expected word id {}, got {}'.format(word.id, word_id)
-        curr_offset += self._bin_fmt.datum_bytes
-
-        doc_count = self._datum_at(curr_offset)
-        assert doc_count > 0, 'Expected at least one document'
-        assert doc_count <= len(self._documents), \
-            'Uh oh... too many documents: {}'.format(doc_count)
-        curr_offset += self._bin_fmt.datum_bytes
-
-        return InvertedIndex.Result(
-            count=doc_count,
-            documents=self._get_documents(curr_offset, doc_count))
-
-    @staticmethod
-    def _merge_results(a, b, gap):
-        """Generator for merged results"""
-        try:
-            a_head = next(a.documents)
-            b_head = next(b.documents)
-            while True:
-                if a_head.id == b_head.id:
-                    # Merge within a document
-                    locations = None
-                    try:
-                        a_ent = next(a_head.locations)
-                        b_ent = next(b_head.locations)
-                        while True:
-                            if a_ent.min_index + gap == b_ent.min_index:
-                                if locations is None:
-                                    locations = deque()
-                                locations.append(a_ent._replace(
-                                    max_index=b_ent.max_index, end=b_ent.end))
-                                a_ent = next(a_head.locations)
-                                b_ent = next(b_head.locations)
-                            elif a_ent.min_index + gap < b_ent.min_index:
-                                a_ent = next(a_head.locations)
-                            else:
-                                b_ent = next(b_head.locations)
-                    except StopIteration:
-                        pass
-                    finally:
-                        if locations is not None:
-                            yield InvertedIndex.DocumentResult(
-                                id=a_head.id, count=len(locations),
-                                locations=iter(locations))
-                    a_head = next(a.documents)
-                    b_head = next(b.documents)
-                elif a_head.id < b_head.id:
-                    a_head = next(a.documents)
-                else:
-                    b_head = next(b.documents)
-        except StopIteration:
-            pass
-
-
-class DocumentData(_BinaryFormatFile):
-    """
-    Interface to a binary encoded document data file
-
-    For each document, there are two sections, always sequential.
-
-    [Time Index]
-    Array of the following, repeated for each entry in transcript.
-
-        start, end: time_interval
-        position: datum
-
-    [Token Data]
-    Array of tokens.
-
-        token: datum
-
-    For O(1) indexing, the Documents object contains a map from documents to
-    their Time Index and Token Data offsets, and the number of tokens.
-    """
-
-    Interval = namedtuple(
-        'Interval', [
-            'start',        # Start time in seconds
-            'end',          # End time in seconds
-            'position',     # Start position in document
-            'length',       # Number of tokens in interval
-            'tokens'        # Generator for tokens in the interval
-        ])
-
-    def __init__(self, path, lexicon, documents, binary_format=None):
-        super(DocumentData, self).__init__(path, binary_format)
-
-        assert isinstance(lexicon, Lexicon)
-        assert isinstance(documents, Documents)
-        self._documents = documents
-        self._lexicon = lexicon
-
-    def _tokens(self, offset, n, decode):
-        entry_bytes = self._bin_fmt.datum_bytes
-        for i in range(n):
-            token_id = self._datum_at(offset + i * entry_bytes)
-            if decode:
-                try:
-                    token = self._lexicon[token_id].token
-                except IndexError:
-                    token = Lexicon.UNKNOWN_TOKEN
-                yield token
-            else:
-                yield token_id
-
-    def tokens(self, doc, start_pos=None, end_pos=None, decode=False):
-        """Generator over tokens in the range (end is non-inclusive)"""
-        if isinstance(doc, Documents.Document):
-            doc = self._documents[doc.id]
-        else:
-            doc = self._documents[doc]
-
-        assert doc.length >= 0, 'Invalid document length: {}'.format(doc.length)
-        assert doc.token_data_offset >= 0, 'Invalid data offset'
-
-        if end_pos is None or end_pos > doc.length:
-            end_pos = doc.length
-
-        if start_pos is None:
-            start_pos = 0
-        elif start_pos < 0:
-            raise ValueError('Start position cannot be negative: {}'.format(
-                             start_pos))
-        elif start_pos >= end_pos:
-            return iter(())
-
-        start_offset = (doc.token_data_offset +
-                        start_pos * self._bin_fmt.datum_bytes)
-        return self._tokens(start_offset, end_pos - start_pos, decode)
-
-    def token_intervals(self, doc, start_time, end_time, decode=False):
-        """Generator over transcript intervals and tokens"""
-        if isinstance(doc, Documents.Document):
-            doc = self._documents[doc.id]
-        else:
-            doc = self._documents[doc]
-
-        assert doc.length >= 0, 'Invalid document length: {}'.format(doc.length)
-        assert doc.time_index_offset >= 0, 'Invalid time index offset'
-        assert doc.token_data_offset >= 0, 'Invalid data offset'
-
-        base_idx_offset = doc.time_index_offset
-        base_token_offset = doc.token_data_offset
-        num_intervals = int(
-            (doc.token_data_offset - doc.time_index_offset) /
-            (self._bin_fmt.time_interval_bytes + self._bin_fmt.datum_bytes))
-
-        for i in range(num_intervals):
-            curr_offset = base_idx_offset + i * (
-                self._bin_fmt.time_interval_bytes + self._bin_fmt.datum_bytes)
-            start, end = self._time_int_at(curr_offset)
-            curr_offset += self._bin_fmt.time_interval_bytes
-            position = self._datum_at(curr_offset)
-            curr_offset += self._bin_fmt.datum_bytes
-
-            if i == num_intervals - 1:
-                next_position = doc.length
-            else:
-                # Peek at next entry, skip time interval
-                curr_offset += self._bin_fmt.time_interval_bytes
-                next_position = self._datum_at(curr_offset)
-
-            if min(end, 1000 * end_time) - max(start, 1000 * start_time) > 0:
-                length = next_position - position
-                yield DocumentData.Interval(
-                    start=start / 1000, end=end / 1000, position=position, length=length,
-                    tokens=self._tokens(
-                        base_token_offset + position * self._bin_fmt.datum_bytes,
-                        length, decode
-                    ))
-
-    def time_to_position(self, doc, time):
-        """Get the token offset for a time using binary search"""
-        if isinstance(doc, Documents.Document):
-            doc = self._documents[doc.id]
-        else:
-            doc = self._documents[doc]
-
-        assert doc.length >= 0, 'Invalid document length: {}'.format(doc.length)
-        assert doc.time_index_offset >= 0, 'Invalid time index offset'
-        assert doc.token_data_offset >= 0, 'Invalid data offset'
-
-        entry_size = self._bin_fmt.time_interval_bytes + self._bin_fmt.datum_bytes
-        entry_count = int((doc.token_data_offset - doc.time_index_offset) / entry_size)
-        max_idx = entry_count
-        min_idx = 0
-        time_ms = time * 1000
-        while max_idx > min_idx:
-            mid_idx = min_idx + int((max_idx - min_idx) / 2)
-            mid_offset = doc.time_index_offset + mid_idx * entry_size
-            start, end = self._time_int_at(mid_offset)
-            if time_ms < start:
-                max_idx = mid_idx
-            elif time_ms > end:
-                min_idx = mid_idx + 1
-            else:
-                max_idx = mid_idx
-                min_idx = mid_idx
-
-        if min_idx == 0:
-            return 0
-        elif min_idx == entry_count:
-            return doc.length
-        else:
-            offset = doc.time_index_offset + min_idx * entry_size
-            return self._datum_at(offset + self._bin_fmt.time_interval_bytes)
+    @__require_open_index
+    def position(self, doc, time_offset):
+        doc_id = self.__get_document_id(doc)
+        return self._rs_index.position(doc_id, time_offset)
 
 
 class MetadataFormat(ABC):
+
+    @staticmethod
+    def header(doc_id: int, n: int):
+        return doc_id.to_bytes(4, 'little') + n.to_bytes(4, 'little')
 
     @abstractmethod
     def decode(self, s):
@@ -666,55 +413,55 @@ class MetadataFormat(ABC):
         pass
 
 
-class MetadataIndex(_MemoryMappedFile):
+class MetadataIndex(object):
     """
     Interface to binary encoded metadata files for efficient iteration
     """
 
-    def __init__(self, path, documents, metadata_format):
-        super(MetadataIndex, self).__init__(path)
-
-        assert isinstance(path, str)
+    def __init__(self, path: str, documents: Documents,
+                 metadata_format: MetadataFormat, debug=False):
         assert isinstance(metadata_format, MetadataFormat)
         assert metadata_format.size > 0, \
             'Invalid metadata size: {}'.format(metadata_format.size)
         self._documents = documents
         self._meta_fmt = metadata_format
+        self._rs_meta = RsMetadataIndex(path, metadata_format.size, debug)
 
-    def _metadata(self, offset, n):
-        entry_size = self._meta_fmt.size
-        for i in range(n):
-            if entry_size == 1:
-                data = self._byte_at(offset + i)
-            else:
-                data = self._bytes_at(offset + i * entry_size)
-            yield self._meta_fmt.decode(data)
+    def __enter__(self):
+        return self
 
-    def metadata(self, doc, start_pos=None, end_pos=None):
-        """Generator over metadata (end is non-inclusive)"""
+    def __exit__(self, exception_type, exception_value, traceback):
+        self.close()
+
+    def close(self):
+        self._rs_meta = None
+
+    def __require_open_index(f):
+        def wrapper(self, *args, **kwargs):
+            if self._rs_meta is None:
+                raise ValueError('I/O on closed MetadataIndex')
+            return f(self, *args, **kwargs)
+        return wrapper
+
+    def __get_document_id(self, doc):
         if isinstance(doc, Documents.Document):
-            doc = self._documents[doc.id]
+            return doc.id
         else:
-            doc = self._documents[doc]
+            return self._documents[doc].id
 
-        assert doc.length >= 0, \
-            'Invalid document length: {}'.format(doc.length)
-        assert doc.meta_data_offset >= 0, \
-            'Invalid metadata offset: {}'.format(doc.meta_data_offset)
-
-        if end_pos is None or end_pos > doc.length:
-            end_pos = doc.length
-
-        if start_pos is None:
-            start_pos = 0
-        elif start_pos < 0:
-            raise ValueError('Start position cannot be negative: {}'.format(
-                             start_pos))
-        elif start_pos >= end_pos:
-            return iter(())
-
-        start_offset = doc.meta_data_offset + start_pos * self._meta_fmt.size
-        return self._metadata(start_offset, end_pos - start_pos)
+    @__require_open_index
+    def metadata(self, doc, position=0, count=2 ** 31) -> List:
+        """
+        Generator over metadata returned by the MetadataFormat's decode method.
+        """
+        doc_id = self.__get_document_id(doc)
+        if position < 0:
+            raise ValueError('Position cannot be negative')
+        if count < 0:
+            raise ValueError('Count cannot be negative')
+        return [
+            self._meta_fmt.decode(b)
+            for b in self._rs_meta.metadata(doc_id, position, count)]
 
 
 class NgramFrequency(object):

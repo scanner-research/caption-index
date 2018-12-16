@@ -5,17 +5,17 @@ Index a directory of transcript files
 """
 
 import argparse
-import heapq
-import math
 import pysrt
 import os
 import shutil
 import traceback
-from collections import defaultdict, deque, namedtuple, Counter
+from collections import defaultdict, deque, Counter
+from io import BytesIO
 from multiprocessing import Pool
 from subprocess import check_call
 from threading import Lock
 from tqdm import tqdm
+from typing import Dict, List, Tuple
 
 from captions import tokenize, Lexicon, Documents, BinaryFormat
 
@@ -25,10 +25,6 @@ MAX_WORD_LEN = 20
 
 DEFAULT_OUT_DIR = 'out'
 DEFAULT_WORKERS = os.cpu_count()
-
-
-TMP_INV_IDX_EXT = '.inv.bin'
-TMP_BIN_DOC_EXT = '.doc.bin'
 
 
 N_WORKERS = None
@@ -55,18 +51,16 @@ def get_args():
                    default=DEFAULT_SOURCE_FILE_EXT,
                    help='Subtitle file extension. Default: {}'.format(
                         DEFAULT_SOURCE_FILE_EXT))
-    p.add_argument('--keep-cache', dest='keep_cache', action='store_true',
-                   help='Cache intermediate index chunks')
     p.add_argument('--limit', dest='limit', type=int,
                    help='Number of documents to parse. Default: None')
     return p.parse_args()
 
 
-def list_subs(dir, ext):
+def list_subs(dir: str, ext: str):
     return [f for f in os.listdir(dir) if f.endswith(ext)]
 
 
-def load_srt(doc_path):
+def load_srt(doc_path: str):
     try:
         subs = pysrt.open(doc_path)
     except:
@@ -77,7 +71,7 @@ def load_srt(doc_path):
     return subs
 
 
-def get_doc_words(doc_path):
+def get_doc_words(doc_path: str):
     words = Counter()
     try:
         subs = load_srt(doc_path)
@@ -91,10 +85,7 @@ def get_doc_words(doc_path):
     return words
 
 
-def get_words(doc_dir, doc_names):
-    assert isinstance(doc_dir, str)
-    assert isinstance(doc_names, list)
-
+def get_words(doc_dir: str, doc_names: List[str]):
     words = Counter()
     words_lock = Lock()
     with tqdm(total=len(doc_names), desc='Building lexicon') as pbar, \
@@ -119,9 +110,11 @@ def get_words(doc_dir, doc_names):
     return words
 
 
-def index_single_doc(doc_path, lexicon):
-    assert isinstance(lexicon, Lexicon)
+def millis_to_seconds(t: int):
+    return t / 1000
 
+
+def read_single_doc(doc_path: str, lexicon: Lexicon):
     doc_inv_index = defaultdict(deque)  # token_id -> [postings]
     doc_lines = deque()                 # [(position, start, end, [tokens])]
     try:
@@ -163,360 +156,106 @@ def index_single_doc(doc_path, lexicon):
     except Exception as e:
         print('Failed to index: {}'.format(doc_path))
         traceback.print_exc()
-    return doc_lines, doc_inv_index
+    return doc_inv_index, doc_lines
 
 
-def write_inv_index(inv_index, out_path):
+def write_doc_index(doc_id: int, doc_inv_index: Dict[int, Tuple[int, int, int]],
+                    doc_lines: List[Tuple[int, int, int, List[int]]],
+                    out_path: str):
+    f_tokens = BytesIO()
+    f_inv_index = BytesIO()
+
+    doc_unique_token_count = len(doc_inv_index)
+    doc_line_count = len(doc_lines)
+
+    doc_posting_count = 0
+    for token_id in sorted(doc_inv_index):
+        f_tokens.write(BINARY_FORMAT.encode_datum(token_id))
+        f_tokens.write(BINARY_FORMAT.encode_datum(doc_posting_count))
+
+        postings = doc_inv_index[token_id]
+        assert len(postings) > 0
+
+        for (position, start, end) in postings:
+            f_inv_index.write(BINARY_FORMAT.encode_time_interval(start, end))
+            f_inv_index.write(BINARY_FORMAT.encode_datum(position))
+            doc_posting_count += 1
+
+    f_time_index = BytesIO()
+    for position, start, end, _ in doc_lines:
+        f_time_index.write(BINARY_FORMAT.encode_time_interval(start, end))
+        f_time_index.write(BINARY_FORMAT.encode_datum(position))
+
+    doc_len = 0
+    doc_duration = 0
+    f_data = BytesIO()
+    for _, _, end, tokens in doc_lines:
+        for t in tokens:
+            f_data.write(BINARY_FORMAT.encode_datum(t))
+        doc_len += len(tokens)
+        doc_duration = max(doc_duration, end)
+
+    # Checks to make sure that the lengths are correct
+    assert doc_unique_token_count == f_tokens.tell() / (
+        2 * BINARY_FORMAT.datum_bytes)
+    assert doc_posting_count == f_inv_index.tell() / (
+        BINARY_FORMAT.datum_bytes + BINARY_FORMAT.time_interval_bytes)
+    assert doc_line_count == f_time_index.tell() / (
+        BINARY_FORMAT.datum_bytes + BINARY_FORMAT.time_interval_bytes)
+    assert doc_len == f_data.tell() / BINARY_FORMAT.datum_bytes
+
+    # Write the index for the single document
     with open(out_path, 'wb') as f:
-        # Order by increasing token_id
-        for token_id in sorted(inv_index):
-            docs = inv_index[token_id]
-            assert len(docs) > 0
-
-            # Token id and number of docs contain it
-            f.write(BINARY_FORMAT.encode_datum(token_id))
-            f.write(BINARY_FORMAT.encode_datum(len(docs)))
-
-            # Order by increasing doc_id
-            for doc_id, postings in sorted(docs, key=lambda x: x[0]):
-                f.write(BINARY_FORMAT.encode_datum(doc_id))
-                f.write(BINARY_FORMAT.encode_datum(len(postings)))
-                assert len(postings) > 0
-
-                # Ordered by position (by contruction)
-                for (position, start, end) in postings:
-                    f.write(BINARY_FORMAT.encode_datum(position))
-                    f.write(BINARY_FORMAT.encode_time_interval(start, end))
+        f.write(BINARY_FORMAT.encode_u32(doc_id))
+        f.write(BINARY_FORMAT.encode_u32(doc_duration))
+        f.write(BINARY_FORMAT.encode_u32(doc_unique_token_count))
+        f.write(BINARY_FORMAT.encode_u32(doc_posting_count))
+        f.write(BINARY_FORMAT.encode_u32(doc_line_count))
+        f.write(BINARY_FORMAT.encode_u32(doc_len))
+        f.write(f_tokens.getvalue())
+        f.write(f_inv_index.getvalue())
+        f.write(f_time_index.getvalue())
+        f.write(f_data.getvalue())
 
 
-def millis_to_seconds(t):
-    return t / 1000
+def index_single_doc(doc_id: int, doc_path: str, out_path: str):
+    doc_inv_index, doc_lines = read_single_doc(doc_path, WORKER_LEXICON)
+    write_doc_index(doc_id, doc_inv_index, doc_lines, out_path)
 
 
-def write_doc_data(doc_lines, out_path):
-    """
-    Appends to the document data file.
-    Returns (time_idx_offset, token_data_offset, doc_len)
-    """
-    with open(out_path, 'ab') as f:
-        doc_time_idx_start = f.tell()
-        for position, start, end, _ in doc_lines:
-            f.write(BINARY_FORMAT.encode_time_interval(start, end))
-            f.write(BINARY_FORMAT.encode_datum(position))
-
-        doc_len = 0
-        doc_duration = 0
-        doc_token_data_start = f.tell()
-        for _, _, end, tokens in doc_lines:
-            for t in tokens:
-                f.write(BINARY_FORMAT.encode_datum(t))
-            doc_len += len(tokens)
-            doc_duration = max(doc_duration, end)
-    return doc_time_idx_start, doc_token_data_start, doc_len, \
-        millis_to_seconds(doc_duration)
-
-
-def index_batch(doc_batch, out_path_prefix):
-    """Build an inverted index and binary reencode documents"""
-    lexicon = WORKER_LEXICON
-
-    assert isinstance(out_path_prefix, str)
-    assert isinstance(lexicon, Lexicon)
-
-    batch_inv_index = defaultdict(deque)    # token_id -> [(doc, [postings])]
-    batch_doc_offsets = deque()
-    for doc_id, doc_path in doc_batch:
-        doc_lines, doc_inv_index = index_single_doc(doc_path, lexicon)
-
-        batch_doc_offsets.append(
-            write_doc_data(doc_lines, out_path_prefix + TMP_BIN_DOC_EXT))
-
-        for token_id, postings in doc_inv_index.items():
-            batch_inv_index[token_id].append((doc_id, postings))
-
-    write_inv_index(batch_inv_index, out_path_prefix + TMP_INV_IDX_EXT)
-    return batch_doc_offsets
-
-
-def index_all_docs(doc_dir, doc_names, lexicon, bin_doc_path, out_dir,
-                   batch_size=100):
+def index_all_docs(doc_dir: str, documents: Documents, lexicon: Lexicon,
+                   out_file: str, tmp_dir: str):
     """Builds inverted indexes and reencode documents in binary"""
 
-    assert isinstance(doc_names, list)
-    assert isinstance(lexicon, Lexicon)
-
     global WORKER_LEXICON
     WORKER_LEXICON = lexicon
 
-    with tqdm(total=len(doc_names), desc='Building indexes') as pbar, \
+    with tqdm(total=len(documents), desc='Building indexes') as pbar, \
             Pool(processes=N_WORKERS) as pool:
-        async_results = deque()
 
-        def progress(doc_offsets):
-            pbar.update(len(doc_offsets))
+        def progress(ignored):
+            pbar.update(1)
 
-        worker_args = deque()
-        for base_id in range(0, len(doc_names), batch_size):
-            doc_batch = [
-                (i, os.path.join(doc_dir, doc_names[i]))
-                for i in range(base_id, min(base_id + batch_size, len(doc_names)))
-            ]
-            out_path_prefix = os.path.join(out_dir, str(base_id))
-            async_results.append(pool.apply_async(
-                index_batch, (doc_batch, out_path_prefix), callback=progress))
-            worker_args.append((doc_batch, out_path_prefix))
+        results = deque()
+        for doc in documents:
+            doc_path = os.path.join(doc_dir, doc.name)
+            out_path = os.path.join(tmp_dir, str(doc.id))
+            async = pool.apply_async(
+                index_single_doc, (doc.id, doc_path, out_path),
+                callback=progress)
+            results.append((async, out_path))
 
-        # Merge the offsets and generate a new set of Documents with offsets
-        # annotated
-        documents = [None] * len(doc_names)
-        global_offset = 0
-        for args, async in zip(worker_args, async_results):
-            doc_batch, out_path_prefix = args
-            doc_offsets = async.get()
-            for a, b in zip(doc_batch, doc_offsets):
-                doc_id, _ = a
-                doc_time_idx_offset, doc_token_data_offset, doc_length, doc_duration = b
-                documents[doc_id] = Documents.Document(
-                    id=doc_id, name=doc_names[doc_id], length=doc_length,
-                    duration=doc_duration,
-                    time_index_offset=doc_time_idx_offset + global_offset,
-                    token_data_offset=doc_token_data_offset + global_offset,
-                    meta_data_offset=-1)
-            global_offset += os.path.getsize(out_path_prefix + TMP_BIN_DOC_EXT)
-
-        assert None not in documents, 'Not all documents were indexed'
+        for async, _ in results:
+            async.get()
 
         # Cat the files together
-        bin_doc_paths = [p + TMP_BIN_DOC_EXT for _, p in worker_args]
-        with open(bin_doc_path, 'wb') as f:
-            check_call(['cat'] + bin_doc_paths, stdout=f)
-
-        return Documents(documents)
+        doc_index_paths = [x for _, x in results]
+        with open(out_file, 'wb') as f:
+            check_call(['cat'] + doc_index_paths, stdout=f)
 
 
-class MergeIndexParser(object):
-
-    ParsedDocument = namedtuple('ParsedDocument', ['id', 'n', 'data'])
-
-    def __init__(self, path, min_token, max_token):
-        """Min and max are INCLUSIVE"""
-        self._path = path
-        self._min_token = min_token
-        self._max_token = max_token
-        self._f = open(path, 'rb')
-        self._done = False
-        self._curr_token = None
-        self._curr_doc = None
-        self._curr_n_docs = None
-        self._curr_n_docs_left = 0
-        self.next_token()
-
-    @property
-    def path(self):
-        return self._path
-
-    @property
-    def token(self):
-        return self._curr_token if not self._done else None
-
-    @property
-    def ndocs(self):
-        assert not self._done, 'EOF already reached'
-        return self._curr_n_docs
-
-    @property
-    def doc(self):
-        assert not self._done, 'EOF already reached'
-        return self._curr_doc
-
-    def close(self):
-        self._f.close()
-        self._done = True
-        self._curr_token = None
-        self._curr_n_docs = None
-        self._curr_n_docs_left = None
-
-    def next_token(self):
-        assert not self._done, 'EOF already reached'
-        assert self._curr_n_docs_left == 0, 'Not done processing docs'
-        while True:
-            token_data = self._f.read(BINARY_FORMAT.datum_bytes)
-            if len(token_data) == 0:
-                self.close()
-                break
-            next_token = BINARY_FORMAT.decode_datum(token_data)
-            if next_token > self._max_token:
-                self.close()
-                break
-
-            self._curr_token = next_token
-            self._curr_n_docs = BINARY_FORMAT.decode_datum(
-                self._f.read(BINARY_FORMAT.datum_bytes))
-            self._curr_n_docs_left = self._curr_n_docs
-            assert self._curr_n_docs > 0, 'Token cannot have no docs'
-            if self._curr_token < self._min_token:
-                self.skip_docs()
-            else:
-                assert self.next_doc() is not None
-                break
-        return self.token
-
-    def next_doc(self):
-        assert self._curr_n_docs_left >= 0
-        if self._curr_n_docs_left == 0:
-            self._curr_doc = None
-        else:
-            self._curr_n_docs_left -= 1
-            doc_id = BINARY_FORMAT.decode_datum(
-                self._f.read(BINARY_FORMAT.datum_bytes))
-            n_postings = BINARY_FORMAT.decode_datum(
-                self._f.read(BINARY_FORMAT.datum_bytes))
-            assert n_postings > 0, 'Empty postings list'
-            postings_len = n_postings * (
-                BINARY_FORMAT.datum_bytes + BINARY_FORMAT.time_interval_bytes)
-            postings_data = self._f.read(postings_len)
-            assert len(postings_data) == postings_len, 'Invalid read'
-            self._curr_doc = MergeIndexParser.ParsedDocument(
-                id=doc_id, n=n_postings, data=postings_data)
-        return self.doc
-
-    def skip_docs(self):
-        assert self._curr_n_docs_left >= 0
-        while self._curr_n_docs_left > 0:
-            self._f.seek(BINARY_FORMAT.datum_bytes, 1)
-            n_postings = BINARY_FORMAT.decode_datum(
-                self._f.read(BINARY_FORMAT.datum_bytes))
-            postings_len = n_postings * (
-                BINARY_FORMAT.datum_bytes + BINARY_FORMAT.time_interval_bytes)
-            assert n_postings > 0, 'Empty postings list'
-            self._f.seek(postings_len, 1)
-            self._curr_n_docs_left -= 1
-
-    def __lt__(self, o):
-        # For priority queuing
-        if self.token == o.token:
-            return self.doc < o.doc
-        return self.token < o.token
-
-
-def merge_inv_indexes(idx_paths, out_path, min_token, max_token):
-    lexicon = WORKER_LEXICON
-
-    token_parsers_pq = []
-    for path in idx_paths:
-        p = MergeIndexParser(path, min_token, max_token - 1)
-        if p.token is not None:
-            token_parsers_pq.append(p)
-    heapq.heapify(token_parsers_pq)
-
-    jump_offsets = [-1] * len(lexicon)
-    with open(out_path, 'wb') as f:
-        for _ in range(len(lexicon)):
-            if len(token_parsers_pq) == 0:
-                break
-            token_id = token_parsers_pq[0].token
-            jump_offsets[token_id] = f.tell()
-
-            doc_parsers_pq = []
-            doc_count = 0
-            while True:
-                if (len(token_parsers_pq) == 0 or
-                        token_parsers_pq[0].token != token_id):
-                    break
-                p = heapq.heappop(token_parsers_pq)
-                doc_count += p.ndocs
-                doc_parsers_pq.append(p)
-            assert len(doc_parsers_pq) >= 1
-            heapq.heapify(doc_parsers_pq)
-
-            f.write(BINARY_FORMAT.encode_datum(token_id))   # Token id
-            f.write(BINARY_FORMAT.encode_datum(doc_count))  # Num docs
-
-            while len(doc_parsers_pq) > 0:
-                p = heapq.heappop(doc_parsers_pq)
-                f.write(BINARY_FORMAT.encode_datum(p.doc.id))   # Doc id
-                f.write(BINARY_FORMAT.encode_datum(p.doc.n))    # Num postings
-                f.write(p.doc.data)                             # Raw postings
-
-                if p.next_doc() is None:
-                    if p.next_token() is not None:
-                        # Return to tokens queue
-                        heapq.heappush(token_parsers_pq, p)
-                else:
-                    # Return to docs queue
-                    heapq.heappush(doc_parsers_pq, p)
-
-    assert len(token_parsers_pq) == 0, 'Uh oh... still have lexicons to merge'
-    return jump_offsets
-
-
-def parallel_merge_inv_indexes(idx_dir, lexicon, out_path, merge_dir):
-
-    assert isinstance(lexicon, Lexicon)
-    global WORKER_LEXICON
-    WORKER_LEXICON = lexicon
-
-    if not os.path.exists(merge_dir):
-        os.makedirs(merge_dir)
-
-    try:
-        idx_paths = [
-            os.path.join(idx_dir, x)
-            for x in os.listdir(idx_dir) if x.endswith(TMP_INV_IDX_EXT)
-        ]
-
-        with tqdm(total=N_WORKERS + 1, desc='Merging indexes') as pbar:
-
-            def progress(ignored):
-                pbar.update(1)
-
-            with Pool(processes=N_WORKERS) as pool:
-                tokens_per_worker = math.ceil(len(lexicon) / N_WORKERS)
-                new_idx_paths = []
-                async_results = deque()
-
-                # Partition across the lexicon
-                for file_no, i in enumerate(range(0, len(lexicon),
-                                            tokens_per_worker)):
-                    new_idx_path = os.path.join(
-                        merge_dir, '{}{}'.format(file_no, TMP_INV_IDX_EXT))
-                    new_idx_paths.append(new_idx_path)
-                    async_results.append(pool.apply_async(
-                        merge_inv_indexes,
-                        (
-                            idx_paths, new_idx_path,
-                            i, min(i + tokens_per_worker, len(lexicon))
-                        ),
-                        callback=progress
-                    ))
-
-                # Merge the jump offsets
-                jump_offsets = [-1] * len(lexicon)
-                global_offset = 0
-                for i, (new_idx_path, async) in enumerate(
-                        zip(new_idx_paths, async_results)):
-                    worker_jump_offsets = async.get()
-                    min_token = i * tokens_per_worker
-                    max_token = min(min_token + tokens_per_worker, len(lexicon))
-                    for t in range(min_token, max_token):
-                        jump_offsets[t] = global_offset + worker_jump_offsets[t]
-                    global_offset += os.path.getsize(new_idx_path)
-
-                # Cat all the files together
-                with open(out_path, 'wb') as f:
-                    check_call(['cat'] + new_idx_paths, stdout=f)
-                progress(None)
-
-            if -1 in jump_offsets:
-                print('Warning: not all lexicon words have been indexed')
-            return jump_offsets
-    finally:
-        shutil.rmtree(merge_dir, True)
-
-
-def main(doc_dir, out_dir, workers,
-         extension=DEFAULT_SOURCE_FILE_EXT,
-         keep_cache=False, limit=None):
+def main(doc_dir, out_dir, workers, extension=DEFAULT_SOURCE_FILE_EXT,
+         limit=None):
     global N_WORKERS
     N_WORKERS = workers
 
@@ -534,54 +273,34 @@ def main(doc_dir, out_dir, workers,
         print('Loading lexicon: {}'.format(lex_path))
         lexicon = Lexicon.load(lex_path)
     else:
-        # Save lexicon without offsets initally
         wordcounts = get_words(doc_dir, doc_names)
         lexicon = Lexicon([
-            Lexicon.Word(i, w, wordcounts[w], -1)
+            Lexicon.Word(i, w, wordcounts[w])
             for i, w in enumerate(sorted(wordcounts.keys()))
         ])
         lexicon.store(lex_path)
         del wordcounts
 
-    # Build inverted index chunks and reencode the documents
-    chunk_dir = os.path.join(out_dir, 'chunks')
+    # Build and store the document list
     docs_path = os.path.join(out_dir, 'docs.list')
-    bin_docs_path = os.path.join(out_dir, 'docs.bin')
-    if not os.path.exists(chunk_dir):
-        os.makedirs(chunk_dir)
-        try:
-            documents = index_all_docs(doc_dir, doc_names, lexicon,
-                                       bin_docs_path, chunk_dir)
-
-            # Store the document list
-            print('Storing document list: {}'.format(docs_path))
-            documents.store(docs_path)
-            del documents
-        except:
-            shutil.rmtree(chunk_dir)
-            raise
-    else:
-        print('Found existing indexes: {}'.format(chunk_dir))
+    documents = Documents([
+        Documents.Document(id=i, name=d) for i, d in enumerate(doc_names)
+    ])
+    print('Storing document list: {}'.format(docs_path))
+    documents.store(docs_path)
     assert os.path.exists(docs_path), 'Missing: {}'.format(docs_path)
-    assert os.path.exists(bin_docs_path), 'Missing: {}'.format(bin_docs_path)
 
-    # Merge the inverted index chunks
-    idx_path = os.path.join(out_dir, 'index.bin')
-    merge_dir = os.path.join(out_dir, 'merge')
-    jump_offsets = parallel_merge_inv_indexes(chunk_dir, lexicon, idx_path,
-                                              merge_dir)
-    assert os.path.exists(idx_path), 'Missing: {}'.format(idx_path)
-
-    # Resave the lexicon with offsets
-    print('Storing lexicon with offsets: {}'.format(lex_path))
-    lexicon = Lexicon([w._replace(offset=jump_offsets[w.id]) for w in lexicon])
-    lexicon.store(lex_path)
-    assert os.path.exists(lex_path), 'Missing: {}'.format(idx_path)
-
-    # Remove the partial inverted index chunks
-    if not keep_cache:
-        print('Removing intermediate data: {}'.format(chunk_dir))
-        shutil.rmtree(chunk_dir, True)
+    # Build inverted index chunks and reencode the documents
+    tmp_dir = os.path.join(out_dir, 'tmp')
+    index_path = os.path.join(out_dir, 'index.bin')
+    os.makedirs(tmp_dir)
+    try:
+        index_all_docs(doc_dir, documents, lexicon, index_path, tmp_dir)
+    except:
+        shutil.rmtree(tmp_dir)
+        raise
+    assert os.path.exists(index_path), 'Missing: {}'.format(index_path)
+    print('Done!')
 
 
 if __name__ == '__main__':

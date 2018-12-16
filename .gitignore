@@ -1,7 +1,11 @@
 /build
+/target
 /dist
+/.eggs
 /*.egg-info
 *.pyc
 *.bin
 *.lex
 /scripts/out
+/out
+Cargo.lock
