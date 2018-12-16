@@ -297,9 +297,9 @@ def main(doc_dir, out_dir, workers, extension=DEFAULT_SOURCE_FILE_EXT,
     os.makedirs(tmp_dir)
     try:
         index_all_docs(doc_dir, documents, lexicon, index_path, tmp_dir)
-    except:
+    finally:
         shutil.rmtree(tmp_dir)
-        raise
+
     assert os.path.exists(index_path), 'Missing: {}'.format(index_path)
     print('Done!')
 

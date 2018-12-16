@@ -13,7 +13,21 @@ from .rs_captions import RsCaptionIndex, RsMetadataIndex
 
 
 class Lexicon(object):
-    """A map from word to id, and vice versa"""
+    """
+    A map from word to id, and vice versa
+
+    Lookup a token with bracket notation:
+        w = lexicon["hello"]
+        w = lexicon[100]        # Word with id 100
+
+    Iterate the lexicon:
+        for w in lexicon:
+            ...
+
+    Test if a word is in the lexicon:
+        if 'hello' in lexicon:
+            ...
+    """
 
     UNKNOWN_TOKEN = '<UNKNOWN>'
 
@@ -63,6 +77,7 @@ class Lexicon(object):
             return Lexicon.UNKNOWN_TOKEN
 
     def store(self, path: str):
+        """Save the lexicon as a TSV file"""
         prev_w = None
         for w in self._words:
             if prev_w:
@@ -77,6 +92,7 @@ class Lexicon(object):
 
     @staticmethod
     def load(path: str):
+        """Load a TSV formatted lexicon"""
         with open(path, 'r') as f:
             tsv_reader = csv.reader(f, delimiter='\t')
             words = []
@@ -88,7 +104,21 @@ class Lexicon(object):
 
 
 class Documents(object):
-    """A mapping from document id to name, and vice versa"""
+    """
+    A mapping from document id to name, and vice versa
+
+    Lookup documents by name or id with bracket notation:
+        d = documents["filename"]
+        d = documents[100]
+
+    Iterate the documents:
+        for d in documents:
+            ...
+
+    Test if a document is in the list:
+        if 'test.srt' in documents:
+            ...
+    """
 
     Document = namedtuple('Document', ['id', 'name'])
 
@@ -124,6 +154,7 @@ class Documents(object):
         return len(self._docs)
 
     def store(self, path: str):
+        """Save the document list as TSV formatted file"""
         with open(path, 'w') as f:
             for d in self._docs:
                 f.write('\t'.join([str(d.id), d.name]))
@@ -131,6 +162,7 @@ class Documents(object):
 
     @staticmethod
     def load(path):
+        """Load a TSV formatted list of documents"""
         documents = []
         with open(path, 'r') as f:
             for line in f:
@@ -252,6 +284,7 @@ class CaptionIndex(object):
     Interface to a binary encoded index file.
     """
 
+    # A "posting" is an occurance of a token or n-gram
     Posting = namedtuple(
         'Posting', [
             'start',        # Start time in seconds
@@ -260,6 +293,7 @@ class CaptionIndex(object):
             'len',          # Number of tokens
         ])
 
+    # Document object with postings
     Document = namedtuple(
         'Document', [
             'id',           # Document ID
@@ -319,13 +353,13 @@ class CaptionIndex(object):
             return self._lexicon[word].id
 
     @__require_open_index
-    def document_length(self, doc):
+    def document_length(self, doc) -> int:
         """Get the length of a document in tokens"""
         doc_id = self.__get_document_id(doc)
         return self._rs_index.document_length(doc_id)[0]
 
     @__require_open_index
-    def document_duration(self, doc):
+    def document_duration(self, doc) -> float:
         """Get the duration of a document in seconds"""
         doc_id = self.__get_document_id(doc)
         return self._rs_index.document_length(doc_id)[1]
@@ -346,8 +380,17 @@ class CaptionIndex(object):
             raise TypeError('Unsupported type: {}'.format(type(text)))
         return tokens
 
-    def search(self, text, documents=None) -> Iterable['CaptionIndex.Document']:
-        """Search for instances of text"""
+    def search(
+        self, text, documents=None
+    ) -> Iterable['CaptionIndex.Document']:
+        """
+        Search for instances of text
+
+        Usage:
+            text: string, list of words, or list of word ids
+            documents: list of documents or ids to search in
+                       ([] or None means all documents)
+        """
         tokens = self.__tokenize_text(text)
         return self.ngram_search(*tokens, documents=documents)
 
@@ -358,7 +401,9 @@ class CaptionIndex(object):
                     CaptionIndex.Posting(*p) for p in postings])
 
     @__require_open_index
-    def ngram_search(self, first_word, *other_words, documents=None) -> Iterable['CaptionIndex.Document']:
+    def ngram_search(
+        self, first_word, *other_words, documents=None
+    ) -> Iterable['CaptionIndex.Document']:
         """Search for ngram instances"""
         doc_ids = self.__get_document_ids(documents)
         word_ids = [self.__get_word_id(w) for w in [first_word, *other_words]]
@@ -366,12 +411,21 @@ class CaptionIndex(object):
             self._rs_index.ngram_search(word_ids, doc_ids))
 
     def contains(self, text, documents=None) -> Set[int]:
-        """Find documents (ids) containing the text"""
+        """
+        Find documents (ids) containing the text
+
+        Usage:
+            text: string, list of words, or list of word ids
+            documents: list of documents or ids to search in
+                       ([] or None means all documents)
+        """
         tokens = self.__tokenize_text(text)
         return self.ngram_contains(*tokens, documents=documents)
 
     @__require_open_index
-    def ngram_contains(self, first_word, *other_words, documents=None) -> Set[int]:
+    def ngram_contains(
+        self, first_word, *other_words, documents=None
+    ) -> Set[int]:
         """Find documents (ids) containing the ngram"""
         doc_ids = self.__get_document_ids(documents)
         word_ids = [self.__get_word_id(w) for w in [first_word, *other_words]]
@@ -384,7 +438,9 @@ class CaptionIndex(object):
         return self._rs_index.tokens(doc_id, index, count)
 
     @__require_open_index
-    def intervals(self, doc, start_time=0., end_time=float('inf')) -> Iterable['CaptionIndex.Posting']:
+    def intervals(
+        self, doc, start_time=0., end_time=float('inf')
+    ) -> Iterable['CaptionIndex.Posting']:
         """Get time intervals in the document"""
         doc_id = self.__get_document_id(doc)
         return [
@@ -467,7 +523,17 @@ class MetadataIndex(object):
 
 
 class NgramFrequency(object):
-    """A map from ngrams to their frequencies"""
+    """
+    A map from ngrams to their frequencies
+
+    Get the frequency of an ngram of all other ngrams of that length
+    with the following:
+        freq = ngram_frequency[('hello', 'there')]
+
+    Test if a ngram exists:
+        if ('hello', 'world') in ngram_frequency:
+            ...
+    """
 
     def __init__(self, path, lexicon, tokenizer=None):
         """Dictionary of ngram to frequency"""
