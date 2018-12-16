@@ -16,7 +16,7 @@ except ImportError:
 
 
 setup_requires = ["setuptools-rust", "wheel", "pytest-runner"]
-install_requires = ['msgpack', 'numpy', 'pysrt', 'spacy', 'tqdm']
+install_requires = ['numpy', 'pysrt', 'spacy', 'tqdm']
 tests_require = install_requires + ["pytest"]
 
 setup(

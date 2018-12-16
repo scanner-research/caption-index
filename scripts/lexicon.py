@@ -10,7 +10,8 @@ import spacy
 import time
 import traceback
 
-from captions import tokenize, Lexicon, Documents, CaptionIndex, NgramFrequency
+from captions import Lexicon, Documents, CaptionIndex, NgramFrequency, \
+                     default_tokenizer
 from captions.util import pmi_search
 
 
@@ -59,7 +60,7 @@ def run_search(query, lexicon, index, ngram_frequency, n,
         q = q.strip()
         if len(q) > 0:
             try:
-                query_list.append(tokenize(q))
+                query_list.append(default_tokenizer().tokens(q))
             except KeyError:
                 print('Not found:', q)
     result = pmi_search(query_list, index, ngram_frequency, n, window_size)

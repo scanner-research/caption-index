@@ -17,11 +17,12 @@ from threading import Lock
 from tqdm import tqdm
 from typing import Dict, List, Tuple
 
-from captions import tokenize, Lexicon, Documents, BinaryFormat
+from captions import Lexicon, Documents, BinaryFormat, default_tokenizer
 
 BINARY_FORMAT = BinaryFormat.default()
 MAX_WORD_LEN = 20
 
+TOKENIZER = default_tokenizer()
 
 DEFAULT_OUT_DIR = 'out'
 DEFAULT_WORKERS = os.cpu_count()
@@ -80,7 +81,7 @@ def get_doc_words(doc_path: str):
         return words
 
     for s in subs:
-        tokens = tokenize(s.text)
+        tokens = TOKENIZER.tokens(s.text)
         words.update(t for t in tokens if len(t) <= MAX_WORD_LEN)
     return words
 
@@ -134,7 +135,7 @@ def read_single_doc(doc_path: str, lexicon: Lexicon):
             tokens = deque()
             entry_start_position = doc_position
 
-            for t in tokenize(s.text):
+            for t in TOKENIZER.tokens(s.text):
                 token = None
                 try:
                     try:

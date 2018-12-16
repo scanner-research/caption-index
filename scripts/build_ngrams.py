@@ -5,9 +5,9 @@ Count ngrams in all of the documents
 """
 
 import argparse
-import msgpack
 import os
 import time
+import pickle
 from tqdm import tqdm
 from collections import deque, Counter
 from multiprocessing import Pool
@@ -125,7 +125,7 @@ def main(index_dir, n, min_count, workers, limit):
 
     print('Saving results: {} ngrams'.format(len(NGRAM_COUNTS)))
     with open(out_path, 'wb') as f:
-        msgpack.dump([NGRAM_COUNTS, ngram_total], f)
+        pickle.dump([NGRAM_COUNTS, ngram_total], f)
 
 
 if __name__ == '__main__':

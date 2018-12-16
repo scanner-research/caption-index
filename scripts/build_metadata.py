@@ -8,7 +8,6 @@ import argparse
 import os
 import spacy
 import traceback
-from collections import deque
 from spacy.tokens import Doc
 from tqdm import tqdm
 

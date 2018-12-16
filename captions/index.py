@@ -2,23 +2,14 @@
 Indexes for srt files
 """
 
-import mmap
-import msgpack
-import spacy
-import types
+import csv
+import pickle
 from abc import ABC, abstractmethod, abstractproperty
 from collections import namedtuple, deque
 from typing import Dict, Iterable, List, Set, Tuple
 
+from .tokenize import default_tokenizer
 from .rs_captions import RsCaptionIndex, RsMetadataIndex
-
-
-MODEL = 'en'
-_TOKENIZER = spacy.load(MODEL, disable=['tagger', 'parser', 'ner'])
-
-
-def tokenize(text):
-    return (t.text for t in _TOKENIZER(text))
 
 
 class Lexicon(object):
@@ -79,16 +70,20 @@ class Lexicon(object):
                 assert w.token > prev_w.token, 'Bad lexicon, not sorted by token'
             prev_w = w
 
-        with open(path, 'wb') as f:
-            msgpack.dump([
-                (w.id, w.token, w.count)
-                for w in self._words
-            ], f, use_bin_type=True)
+        with open(path, 'w') as f:
+            tsv_writer = csv.writer(f, delimiter='\t')
+            for w in self._words:
+                tsv_writer.writerow([w.id, w.count, w.token])
 
     @staticmethod
     def load(path: str):
-        with open(path, 'rb') as f:
-            words = [Lexicon.Word(*x) for x in msgpack.load(f, raw=False)]
+        with open(path, 'r') as f:
+            tsv_reader = csv.reader(f, delimiter='\t')
+            words = []
+            for row in tsv_reader:
+                id_, count, token = row
+                words.append(Lexicon.Word(id=int(id_), count=int(count),
+                                          token=token))
         return Lexicon(words)
 
 
@@ -272,7 +267,7 @@ class CaptionIndex(object):
         ])
 
     def __init__(self, path: str, lexicon: Lexicon, documents: Documents,
-                 binary_format=None, debug=False):
+                 binary_format=None, tokenizer=None, debug=False):
         assert isinstance(lexicon, Lexicon)
         assert isinstance(documents, Documents)
         self._lexicon = lexicon
@@ -280,6 +275,10 @@ class CaptionIndex(object):
 
         if binary_format is None:
             binary_format = BinaryFormat.default()
+
+        if tokenizer is None:
+            tokenizer = default_tokenizer()
+        self._tokenizer = tokenizer
 
         self._rs_index = RsCaptionIndex(
             path, datum_size=binary_format.datum_bytes,
@@ -333,7 +332,7 @@ class CaptionIndex(object):
 
     def __tokenize_text(self, text):
         if isinstance(text, str):
-            tokens = list(tokenize(text.strip()))
+            tokens = list(self._tokenizer.tokens(text.strip()))
             if len(tokens) == 0:
                 raise ValueError('No words in input')
             for t in tokens:
@@ -343,15 +342,12 @@ class CaptionIndex(object):
             tokens = text
             if len(tokens) == 0:
                 raise ValueError('No words in input')
-        elif isinstance(text, types.GeneratorType):
-            tokens = list(text)
-            if len(tokens) == 0:
-                raise ValueError('No words in input')
         else:
             raise TypeError('Unsupported type: {}'.format(type(text)))
         return tokens
 
     def search(self, text, documents=None) -> Iterable['CaptionIndex.Document']:
+        """Search for instances of text"""
         tokens = self.__tokenize_text(text)
         return self.ngram_search(*tokens, documents=documents)
 
@@ -363,28 +359,33 @@ class CaptionIndex(object):
 
     @__require_open_index
     def ngram_search(self, first_word, *other_words, documents=None) -> Iterable['CaptionIndex.Document']:
+        """Search for ngram instances"""
         doc_ids = self.__get_document_ids(documents)
         word_ids = [self.__get_word_id(w) for w in [first_word, *other_words]]
         return self.__unpack_rs_search(
             self._rs_index.ngram_search(word_ids, doc_ids))
 
     def contains(self, text, documents=None) -> Set[int]:
+        """Find documents (ids) containing the text"""
         tokens = self.__tokenize_text(text)
         return self.ngram_contains(*tokens, documents=documents)
 
     @__require_open_index
     def ngram_contains(self, first_word, *other_words, documents=None) -> Set[int]:
+        """Find documents (ids) containing the ngram"""
         doc_ids = self.__get_document_ids(documents)
         word_ids = [self.__get_word_id(w) for w in [first_word, *other_words]]
         return set(self._rs_index.ngram_contains(word_ids, doc_ids))
 
     @__require_open_index
     def tokens(self, doc, index=0, count=2 ** 31) -> List[int]:
+        """Get token ids for a range of positions in a document"""
         doc_id = self.__get_document_id(doc)
         return self._rs_index.tokens(doc_id, index, count)
 
     @__require_open_index
     def intervals(self, doc, start_time=0., end_time=float('inf')) -> Iterable['CaptionIndex.Posting']:
+        """Get time intervals in the document"""
         doc_id = self.__get_document_id(doc)
         return [
             CaptionIndex.Posting(*p)
@@ -392,6 +393,7 @@ class CaptionIndex(object):
 
     @__require_open_index
     def position(self, doc, time_offset):
+        """Find next token position containing or near the time offset"""
         doc_id = self.__get_document_id(doc)
         return self._rs_index.position(doc_id, time_offset)
 
@@ -467,20 +469,25 @@ class MetadataIndex(object):
 class NgramFrequency(object):
     """A map from ngrams to their frequencies"""
 
-    def __init__(self, path, lexicon):
+    def __init__(self, path, lexicon, tokenizer=None):
         """Dictionary of ngram to frequency"""
         assert isinstance(path, str)
         assert isinstance(lexicon, Lexicon)
         self._lexicon = lexicon
+
+        if tokenizer is None:
+            tokenizer = default_tokenizer()
+        self._tokenizer = tokenizer
+
         with open(path, 'rb') as f:
-            self._counts, self._totals = msgpack.load(f, use_list=False)
+            self._counts, self._totals = pickle.load(f)
 
     def __iter__(self):
         return self._counts.__iter__()
 
     def __getitem__(self, key):
         if isinstance(key, str):
-            key = tuple(tokenize(key.strip()))
+            key = tuple(self._tokenizer.tokens(key.strip()))
         denom = self._totals[len(key) - 1]
         if isinstance(key[0], int):
             return self._counts[key] / denom

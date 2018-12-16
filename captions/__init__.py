@@ -1,6 +1,8 @@
 from .index import *
+from .tokenize import *
 
 __all__ = [
-    'tokenize', 'Lexicon', 'Documents', 'CaptionIndex', 'BinaryFormat',
-    'MetadataFormat', 'MetadataIndex', 'NgramFrequency'
+    'Lexicon', 'Documents', 'CaptionIndex', 'BinaryFormat',
+    'MetadataFormat', 'MetadataIndex', 'NgramFrequency',
+    'default_tokenizer', 'Tokenizer'
 ]

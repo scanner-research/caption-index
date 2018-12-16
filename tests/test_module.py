@@ -62,7 +62,7 @@ def _get_docs_and_lex(idx_dir):
 
 def test_tokenize():
     text = 'I\'m a string! This is a tokenizer test.'
-    tokens = list(captions.tokenize(text))
+    tokens = list(captions.default_tokenizer().tokens(text))
     assert isinstance(tokens[0], str)
     assert len(tokens) == 11
 
