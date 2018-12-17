@@ -533,8 +533,10 @@ impl RsCaptionIndex {
             eprintln!("intervals: {}s to {}s in {}", start, end, doc_id);
         }
         // Get document locations that overlap start and end
-        let start_ms = s_to_ms(start);
-        let end_ms = s_to_ms(end);
+        if start > ms_to_s(u32::max_value()) {
+            return Err(exceptions::ValueError::py_err("Start time exceeds maximum allowed"))
+        }
+        let start_ms = if start > 0. {s_to_ms(start)} else {0};
         let posting_size = self._internal.posting_size();
         let time_int_size = self._internal.time_int_size();
         match self._internal.docs.get(&doc_id) {
@@ -544,6 +546,7 @@ impl RsCaptionIndex {
                 if start_idx > 0 {
                     start_idx -= 1;
                 }
+                let end_ms = if ms_to_s(d.duration) < end {d.duration} else {s_to_ms(end)};
                 let base_index_ofs = d.base_offset + d.time_index_offset;
                 for i in start_idx..(d.time_int_count as usize) {
                     let ofs = i * posting_size + base_index_ofs;
@@ -551,12 +554,16 @@ impl RsCaptionIndex {
                     if cmp::min(end_ms, time_int.1) >= cmp::max(start_ms, time_int.0) {
                         // Non-zero overlap
                         let pos = self._internal.read_datum(ofs + time_int_size) as usize;
-                        let next_pos: usize = if ofs < (d.time_int_count as usize) - 1 {
+                        let next_pos: usize = if i + 1 < (d.time_int_count as usize) {
                             self._internal.read_datum(
                                 ofs + posting_size + time_int_size) as usize
                         } else {d.length};
+                        assert!(next_pos >= pos, "postions are not non-decreasing");
                         locations.push(
                             (ms_to_s(time_int.0), ms_to_s(time_int.1), pos, next_pos - pos))
+                    }
+                    if time_int.0 > end_ms {
+                        break;
                     }
                 }
                 Ok(locations)

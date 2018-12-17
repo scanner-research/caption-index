@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import math
 import os
 import pytest
 import sys
@@ -93,29 +94,38 @@ def test_inverted_index():
     idx_path = os.path.join(idx_dir, 'index.bin')
     documents, lexicon = _get_docs_and_lex(idx_dir)
 
-    def test_search_and_contains(tokens):
-        ids = index.contains(tokens)
+    def test_search_and_contains(tokens, doc_ids=None):
+        ids = index.contains(tokens, doc_ids)
         search_ids = set()
-        for d in index.search(tokens):
+        for d in index.search(tokens, doc_ids):
             assert len(d.postings) > 0
             for l in d.postings:
                 assert l.len == len(tokens)
             search_ids.add(d.id)
         assert ids == search_ids
 
+    all_doc_ids = [d.id for d in documents]
     with captions.CaptionIndex(idx_path, lexicon, documents) as index:
         # Unigram search
         test_search_and_contains(['THE'])
         test_search_and_contains(['UNITED'])
         test_search_and_contains(['STATES'])
         test_search_and_contains(['AND'])
+        test_search_and_contains(['THE'], all_doc_ids)
+        test_search_and_contains(['UNITED'], all_doc_ids)
+        test_search_and_contains(['STATES'], all_doc_ids)
+        test_search_and_contains(['AND'], all_doc_ids)
 
         # Bigram search
         test_search_and_contains(['UNITED', 'STATES'])
         test_search_and_contains(['UNITED', 'KINGDOM'])
+        test_search_and_contains(['UNITED', 'STATES'], all_doc_ids)
+        test_search_and_contains(['UNITED', 'KINGDOM'], all_doc_ids)
 
         # N-gram search
         test_search_and_contains(['UNITED', 'STATES', 'OF', 'AMERICA'])
+        test_search_and_contains(['UNITED', 'STATES', 'OF', 'AMERICA'],
+                                 all_doc_ids)
 
 
 def test_token_data():
@@ -124,7 +134,12 @@ def test_token_data():
     documents, lexicon = _get_docs_and_lex(idx_dir)
     with captions.CaptionIndex(idx_path, lexicon, documents) as index:
         for i in range(len(documents)):
-            for t in index.tokens(i):
+            doc_len = index.document_length(i)
+            tokens = index.tokens(i)
+            assert len(tokens) == doc_len, \
+                '{} has an inconsistent number of tokens'.format(
+                documents[i].name)
+            for t in tokens:
                 lexicon.decode(t)
 
 
@@ -135,8 +150,19 @@ def test_intervals_data():
     with captions.CaptionIndex(idx_path, lexicon, documents) as index:
         for i in range(len(documents)):
             assert len(index.intervals(i, 0, 0)) == 0
-            for posting in index.intervals(i, 0, 2 ** 16):
-                pass
+            duration = index.document_duration(i)
+            postings = index.intervals(i)
+            assert len(postings) > 0, \
+                '{} has no intervals'.format(documents[i].name)
+            length_from_intervals = 0
+            posting_lens = []
+            for posting in postings:
+                length_from_intervals += posting.len
+                posting_lens.append(posting.len)
+            assert math.fabs(postings[-1].end - duration) < 1e-6
+            assert length_from_intervals == index.document_length(i), \
+                '{} has an inconsistent number of tokens'.format(
+                documents[i].name)
 
 
 def test_util_window():
