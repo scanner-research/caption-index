@@ -249,10 +249,13 @@ def index_all_docs(doc_dir: str, documents: Documents, lexicon: Lexicon,
         for async, _ in results:
             async.get()
 
-        # Cat the files together
+        # Cat the files together (in batches to avoid too many args)
         doc_index_paths = [x for _, x in results]
+        batch_size = 1000
         with open(out_file, 'wb') as f:
-            check_call(['cat'] + doc_index_paths, stdout=f)
+            for i in range(0, len(doc_index_paths), batch_size):
+                max_idx = min(i + batch_size, len(doc_index_paths))
+                check_call(['cat'] + doc_index_paths[i:max_idx], stdout=f)
 
 
 def main(doc_dir, out_dir, workers, extension=DEFAULT_SOURCE_FILE_EXT,
