@@ -11,7 +11,8 @@ class Tokenizer(ABC):
 
 
 def _sanitize(t):
-   return ''.join(filter(lambda x: x in string.printable, t)).strip()
+    return ''.join(filter(lambda x: x in string.printable, t)).strip()
+
 
 class SpacyTokenizer(Tokenizer):
 

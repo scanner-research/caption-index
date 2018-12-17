@@ -14,9 +14,14 @@ except ImportError:
     else:
         from setuptools_rust import RustExtension
 
-
 setup_requires = ["setuptools-rust", "wheel", "pytest-runner"]
-install_requires = ['numpy', 'pysrt', 'spacy', 'tqdm']
+install_requires = [
+    'numpy>=1.15.4',
+    'pysrt>=1.1.1',
+    'pytest>=4.0.1',
+    'spacy>=2.0.18',
+    'tqdm>=4.28.1'
+]
 tests_require = install_requires + ["pytest"]
 
 setup(

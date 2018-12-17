@@ -9,6 +9,8 @@ while limiting resident memory usage and IO/computational latency.
 
 Run `python3 setup.py install --user`
 
+Run `.get_models.sh` to download the spacy model required for tokenization.
+
 ## Usage
 
 #### Indexing your files
