@@ -184,9 +184,23 @@ def test_topic_search():
     idx_path = os.path.join(idx_dir, 'index.bin')
     documents, lexicon = _get_docs_and_lex(idx_dir)
     with captions.CaptionIndex(idx_path, lexicon, documents) as index:
-        for d in util.topic_search(['UNITED STATES', 'AMERICA', 'US'], index):
+        all_results = []
+        for d in util.topic_search(
+            ['UNITED STATES', 'AMERICA', 'US'], index
+        ):
             assert len(d.postings) > 0
+            all_results.append((d.id, len(d.postings)))
 
+        subset_results = []
+        for d in util.topic_search(
+            ['UNITED STATES', 'AMERICA', 'US'], index,
+            documents=list(range(10))
+        ):
+            assert len(d.postings) > 0
+            subset_results.append((d.id, len(d.postings)))
+
+        assert all_results[:10] == subset_results, \
+            'Search on subset does not match'
 
 def test_script_scan():
     idx_dir = os.path.join(TMP_DIR, TEST_INDEX_SUBDIR)

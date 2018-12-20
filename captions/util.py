@@ -49,7 +49,9 @@ def _dilate_postings(postings: Iterable[CaptionIndex.Posting], window: int,
     ) for p in postings]
 
 
-def _deoverlap_postings(postings: Iterable[CaptionIndex.Posting]) -> Iterable[CaptionIndex.Posting]:
+def _deoverlap_postings(
+    postings: Iterable[CaptionIndex.Posting]
+) -> Iterable[CaptionIndex.Posting]:
     new_postings = deque()
     curr_posting = None
     for p in postings:
@@ -144,7 +146,8 @@ def _union_search_results(document_results):
             yield curr_doc_head._replace(postings=new_postings)
 
 
-def topic_search(phrases: List, index: CaptionIndex, window_size=30):
+def topic_search(phrases: List, index: CaptionIndex, window_size=30,
+                 documents=None):
     """
     Search for time segments where any of the phrases occur with time windows
     dilated by window size seconds.
@@ -154,7 +157,7 @@ def topic_search(phrases: List, index: CaptionIndex, window_size=30):
     results = []
     for phrase in phrases:
         try:
-            result = index.search(phrase)
+            result = index.search(phrase, documents=documents)
             results.append(_dilate_search_results(index, result, window_size))
         except (KeyError, IndexError, ValueError):
             pass
