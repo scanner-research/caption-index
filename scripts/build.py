@@ -88,13 +88,10 @@ def get_doc_words(doc_path: str):
 
 def get_words(doc_dir: str, doc_names: List[str]):
     words = Counter()
-    words_lock = Lock()
     with tqdm(total=len(doc_names), desc='Building lexicon') as pbar, \
             Pool(processes=N_WORKERS) as pool:
 
         def collect(result):
-            with words_lock:
-                words.update(result)
             pbar.update(1)
 
         async_results = deque()
@@ -105,7 +102,7 @@ def get_words(doc_dir: str, doc_names: List[str]):
 
         # Forces exceptions to be rethrown
         for a in async_results:
-            a.get()
+            words.update(a.get())
 
     print('Lexicon size: {}'.format(len(words)))
     return words
