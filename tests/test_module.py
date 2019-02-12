@@ -68,6 +68,19 @@ def test_tokenize():
     assert len(tokens) == 11
 
 
+def test_lemmatize():
+    lemmatizer = captions.default_lemmatizer()
+    assert 'tree' in lemmatizer.lemma('tree')
+    assert 'tree' in lemmatizer.lemma('trees')
+    assert 'duck' in lemmatizer.lemma('duck')
+    assert 'duck' in lemmatizer.lemma('ducks')
+
+    # Force lemmatization in the lexicon
+    idx_dir = os.path.join(TMP_DIR, TEST_INDEX_SUBDIR)
+    _, lexicon = _get_docs_and_lex(idx_dir)
+    assert lexicon['DUCK'].id in lexicon.similar('DUCKS')
+
+
 def test_binary_format():
     bf = captions.BinaryFormat.default()
     assert 0 == bf._decode_datum(bf.encode_datum(0))
@@ -201,6 +214,7 @@ def test_topic_search():
 
         assert all_results[:10] == subset_results, \
             'Search on subset does not match'
+
 
 def test_script_scan():
     idx_dir = os.path.join(TMP_DIR, TEST_INDEX_SUBDIR)

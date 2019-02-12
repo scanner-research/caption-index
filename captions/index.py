@@ -8,6 +8,7 @@ from abc import ABC, abstractmethod, abstractproperty
 from collections import namedtuple, deque
 from typing import Dict, Iterable, List, Set, Tuple
 
+from .lemmatize import default_lemmatizer
 from .tokenize import default_tokenizer
 from .rs_captions import RsCaptionIndex, RsMetadataIndex
 
@@ -46,6 +47,8 @@ class Lexicon(object):
         for i, w in enumerate(words):
             assert w.id == i
             self._inverse[w.token] = w
+        self._lemmas = None
+        self._lemmatizer = None
 
     def __iter__(self):
         # Iterate lexicon in id order
@@ -69,6 +72,30 @@ class Lexicon(object):
 
     def __len__(self):
         return len(self._words)
+
+    def __lemmas_init(self):
+        """Compute lemmas for every word"""
+        lemmatizer = default_lemmatizer()
+        lemmas = {}
+        for w in self._words:
+            for lem in lemmatizer.lemma(w.token.lower()):
+                if lem not in lemmas:
+                    lemmas[lem] = set()
+                lemmas[lem].add(w.id)
+        self._lemmatizer = lemmatizer
+        self._lemmas = lemmas
+
+    def similar(self, key):
+        """Return words that are similar (share the same lemma)"""
+        if self._lemmatizer is None:
+            self.__lemmas_init()
+            assert self._lemmatizer is not None
+            assert self._lemmas is not None
+        w = self.__getitem__(key)
+        results = set()
+        for lem in self._lemmatizer.lemma(w.token.lower()):
+            results.update(self._lemmas.get(lem, []))
+        return results
 
     def decode(self, key):
         try:

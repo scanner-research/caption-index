@@ -12,7 +12,7 @@ import traceback
 
 from captions import Lexicon, Documents, CaptionIndex, NgramFrequency, \
                      default_tokenizer
-from captions.util import pmi_search
+import captions.pmi as pmi
 
 
 DEFAULT_WINDOW = 30
@@ -63,7 +63,7 @@ def run_search(query, lexicon, index, ngram_frequency, n,
                 query_list.append(default_tokenizer().tokens(q))
             except KeyError:
                 print('Not found:', q)
-    result = pmi_search(query_list, index, ngram_frequency, n, window_size)
+    result = pmi.compute(query_list, index, ngram_frequency, n, window_size)
     elapsed_time = time.time() - start_time
 
     for i in range(1, n + 1):

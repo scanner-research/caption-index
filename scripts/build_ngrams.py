@@ -16,7 +16,7 @@ from captions import Lexicon, Documents, CaptionIndex
 from captions.util import window
 
 DEFAULT_WORKERS = os.cpu_count()
-DEFAULT_N = 5
+DEFAULT_N = 3
 DEFAULT_THRESH = 1000
 
 
