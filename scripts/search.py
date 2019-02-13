@@ -9,8 +9,8 @@ import os
 import time
 import traceback
 
-from captions import Lexicon, Documents, CaptionIndex, default_tokenizer
-from captions.util import topic_search
+from captions import Lexicon, Documents, CaptionIndex
+from captions.query import Query
 
 
 DEFAULT_CONTEXT = 3
@@ -39,25 +39,10 @@ def format_seconds(s):
         hours, minutes, seconds, millis)
 
 
-def run_search(query, documents, lexicon, index, context_size, silent):
+def run_search(query_str, documents, lexicon, index, context_size, silent):
     start_time = time.time()
-    tokenizer = default_tokenizer()
-
-    if ',' not in query:
-        # Phrase search
-        query_tokens = list(tokenizer.tokens(query))
-        result = index.search(query_tokens)
-    else:
-        # Topic search
-        query_list = []
-        for q in query.split(','):
-            q = q.strip()
-            if len(q) > 0:
-                try:
-                    query_list.append(tokenizer.tokens(q))
-                except KeyError:
-                    print('Not found:', q)
-        result = topic_search(query_list, index)
+    query = Query(query_str)
+    result = query.execute(lexicon, index)
 
     total_seconds = 0
     occurence_count = 0
@@ -105,7 +90,7 @@ def main(index_dir, query, silent, context_size):
             run_search(' '.join(query), documents, lexicon, index,
                        context_size, silent)
         else:
-            print('Enter a phrase or topic (phrases separated by commas):')
+            print('Enter a query:')
             while True:
                 try:
                     query = input('> ')

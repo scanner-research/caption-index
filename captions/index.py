@@ -91,16 +91,21 @@ class Lexicon(object):
             self.__lemmas_init()
             assert self._lemmatizer is not None
             assert self._lemmas is not None
-        w = self.__getitem__(key)
+        if isinstance(key, str):
+            s = key
+        elif isinstance(key, Lexicon.Word):
+            s = key.token
+        else:
+            s = self.__getitem__(key).token
         results = set()
-        for lem in self._lemmatizer.lemma(w.token.lower()):
+        for lem in self._lemmatizer.lemma(s.lower()):
             results.update(self._lemmas.get(lem, []))
         return results
 
     def decode(self, key):
         try:
             return self.__getitem__(key).token
-        except:
+        except (KeyError, IndexError):
             return Lexicon.UNKNOWN_TOKEN
 
     def store(self, path: str):
