@@ -8,6 +8,7 @@ import argparse
 import os
 import time
 import traceback
+from termcolor import colored, cprint
 
 from captions import Lexicon, Documents, CaptionIndex
 from captions.query import Query
@@ -39,6 +40,9 @@ def format_seconds(s):
         hours, minutes, seconds, millis)
 
 
+BOLD_ATTRS = ['bold']
+
+
 def run_search(query_str, documents, lexicon, index, context_size, silent):
     start_time = time.time()
     query = Query(query_str)
@@ -49,7 +53,7 @@ def run_search(query_str, documents, lexicon, index, context_size, silent):
     doc_count = 0
     for i, d in enumerate(result):
         if not silent:
-            print(documents[d.id].name)
+            cprint(documents[d.id].name, 'grey', 'on_white', attrs=BOLD_ATTRS)
         occurence_count += len(d.postings)
         for j, p in enumerate(d.postings):
             total_seconds += p.end - p.start
@@ -57,23 +61,37 @@ def run_search(query_str, documents, lexicon, index, context_size, silent):
                 if context_size > 0:
                     start_idx = max(p.idx - context_size, 0)
                     context = ' '.join([
+                        colored(lexicon.decode(t), 'red', attrs=BOLD_ATTRS)
+                        if k >= p.idx and k < p.idx + p.len else
                         lexicon.decode(t)
-                        for t in index.tokens(
-                            d.id, index=start_idx,
-                            count=p.idx + p.len + context_size - start_idx)
+                        for k, t in enumerate(
+                            index.tokens(
+                                d.id, index=start_idx,
+                                count=p.idx + p.len + context_size - start_idx
+                            ),
+                            start_idx
+                        )
                     ])
                 else:
                     context = query
 
-                print(' {}-- [{} - {}] [position: {}] "{}"'.format(
-                    '\\' if j == len(d.postings) - 1 else '|',
-                    format_seconds(p.start), format_seconds(p.end),
-                    p.idx if p.len == 1 else '{}-{}'.format(p.idx, p.idx + p.len),
-                    context))
+                interval_str = '{} - {}'.format(
+                    format_seconds(p.start), format_seconds(p.end))
+                position_str = (
+                    str(p.idx) if p.len == 1 else
+                    '{}-{}'.format(p.idx, p.idx + p.len))
+                print(
+                    ' {}-- [{}] [position: {}] "{}"'.format(
+                        '\\' if j == len(d.postings) - 1 else '|',
+                        colored(interval_str, 'yellow', attrs=BOLD_ATTRS),
+                        colored(position_str, 'blue', attrs=BOLD_ATTRS),
+                        context))
         doc_count += 1
-    print('Found {} documents, {} occurences, spanning {:d}s in {:d}ms'.format(
-          doc_count, occurence_count, int(total_seconds),
-          int((time.time() - start_time) * 1000)))
+    cprint(
+        'Found {} documents, {} occurences, spanning {:d}s in {:d}ms'.format(
+            doc_count, occurence_count, int(total_seconds),
+            int((time.time() - start_time) * 1000)),
+        'white', 'on_green', attrs=BOLD_ATTRS)
 
 
 def main(index_dir, query, silent, context_size):

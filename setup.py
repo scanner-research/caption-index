@@ -17,11 +17,12 @@ except ImportError:
 setup_requires = ['setuptools-rust', 'wheel', 'pytest-runner']
 install_requires = [
     'numpy>=1.15.4',
+    'parsimonious>=0.8.1',
     'pysrt>=1.1.1',
     'pytest>=4.0.1',
     'spacy>=2.0.18',
+    'termcolor>=1.1.0',
     'tqdm>=4.28.1',
-    'parsimonious>=0.8.1'
 ]
 tests_require = install_requires + ['pytest>=4.2.1', 'pyaml>=18.11.0']
 
