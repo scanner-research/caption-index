@@ -12,6 +12,7 @@ from termcolor import colored, cprint
 
 from captions import Lexicon, Documents, CaptionIndex
 from captions.query import Query
+from captions.util import PostingUtil
 
 
 DEFAULT_CONTEXT = 3
@@ -55,7 +56,8 @@ def run_search(query_str, documents, lexicon, index, context_size, silent):
         if not silent:
             cprint(documents[d.id].name, 'grey', 'on_white', attrs=BOLD_ATTRS)
         occurence_count += len(d.postings)
-        for j, p in enumerate(d.postings):
+        for j, p in enumerate(PostingUtil.deoverlap(d.postings,
+                                                    use_time=False)):
             total_seconds += p.end - p.start
             if not silent:
                 if context_size > 0:

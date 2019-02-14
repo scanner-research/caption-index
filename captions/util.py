@@ -9,7 +9,7 @@ import numpy as np
 import sys
 import os
 from collections import deque, Counter
-from typing import Iterable, List
+from typing import Iterable, List, Tuple
 
 from .index import Lexicon, CaptionIndex, NgramFrequency
 
@@ -37,87 +37,98 @@ def window(tokens: Iterable, n: int, subwindows=False):
 
 
 def frequent_words(lexicon: Lexicon, percentile=99.7) -> List[Lexicon.Word]:
+    """Return words at a frequency percentile"""
     threshold = np.percentile([w.count for w in lexicon], percentile)
     return [w for w in lexicon if w.count >= threshold]
 
 
-def _dilate_postings(postings: Iterable[CaptionIndex.Posting], window: int,
-                     duration: float) -> Iterable[CaptionIndex.Posting]:
-    return [p._replace(
-        start=max(p.start - window, 0), end=min(p.end + window, duration)
-    ) for p in postings]
+class PostingUtil(object):
+
+    @staticmethod
+    def merge(p1, p2):
+        """Merge two postings"""
+        start_idx = min(p1.idx, p2.idx)
+        end_idx = max(p1.idx + p1.len, p2.idx + p2.len)
+        return p1._replace(
+            start=min(p1.start, p2.start),
+            end=max(p1.end, p2.end),
+            idx=start_idx,
+            len=end_idx - start_idx)
+
+    @staticmethod
+    def deoverlap(
+        postings: Iterable[CaptionIndex.Posting], threshold=0, use_time=True
+    ) -> List[CaptionIndex.Posting]:
+        """Merge postings which overlap"""
+        result = []
+        curr_p = None
+
+        def overlaps(p1, p2):
+            if use_time:
+                return (p2.start >= p1.start and
+                        p2.start - p1.end <= threshold)
+            else:
+                return (p2.idx >= p1.idx and
+                        p2.idx - (p1.idx + p1.len) <= threshold)
+
+        for p in postings:
+            if curr_p is None:
+                curr_p = p
+            elif overlaps(curr_p, p):
+                curr_p = PostingUtil.merge(curr_p, p)
+            else:
+                result.append(curr_p)
+                curr_p = p
+        if curr_p is not None:
+            result.append(curr_p)
+        return result
+
+    @staticmethod
+    def dilate(
+        postings: Iterable[CaptionIndex.Posting], window: int, duration: float
+    ) -> List[CaptionIndex.Posting]:
+        """Dilate start and end times"""
+        return [
+            p._replace(
+                start=max(p.start - window, 0),
+                end=min(p.end + window, duration)
+            ) for p in postings]
+
+    @staticmethod
+    def union(
+        postings_lists: List[Iterable[CaptionIndex.Posting]], use_time=True
+    ) -> List[CaptionIndex.Posting]:
+        """Merge several lists of postings by order of idx."""
+        result = []
+        pq = []
+        for i, ps_list in enumerate(postings_lists):
+            ps_iter = iter(ps_list)
+            ps_head = next(ps_iter)
+            priority = ps_head.start if use_time else ps_head.idx
+            pq.append((priority, i, ps_head, ps_iter))
+        heapq.heapify(pq)
+
+        while len(pq) > 0:
+            _, i, ps_head, ps_iter = heapq.heappop(pq)
+            result.append(ps_head)
+            try:
+                ps_head = next(ps_iter)
+                priority = ps_head.start if use_time else ps_head.idx
+                heapq.heappush(pq, (priority, i, ps_head, ps_iter))
+            except StopIteration:
+                pass
+        return result
 
 
-def _deoverlap_postings(
-    postings: Iterable[CaptionIndex.Posting]
-) -> Iterable[CaptionIndex.Posting]:
-    new_postings = deque()
-    curr_posting = None
-    for p in postings:
-        if curr_posting is None:
-            curr_posting = p
-        elif curr_posting.end >= p.start:
-            if VERBOSE and curr_posting.start <= p.start:
-                print('{} > {}'.format(curr_posting.start, p.start),
-                      file=sys.stderr)
-            min_idx = min(p.idx, curr_posting.idx)
-            max_idx = max(p.idx + p.len, curr_posting.idx + curr_posting.len)
-            curr_posting = curr_posting._replace(
-                end=max(p.end, curr_posting.end), idx=min_idx,
-                len=max_idx - min_idx)
-        else:
-            new_postings.append(curr_posting)
-            curr_posting = p
-    if curr_posting is not None:
-        new_postings.append(curr_posting)
-    return new_postings
-
-
-def _dilate_search_results(index: CaptionIndex,
-                           results: Iterable[CaptionIndex.Document],
-                           window: int) -> Iterable[CaptionIndex.Document]:
-    """
-    For each document's result, add/subtract window to the end/start time of
-    each posting.
-    """
-    for d in results:
-        duration = index.document_duration(d.id)
-        postings = _deoverlap_postings(
-            _dilate_postings(d.postings, window, duration))
-        yield d._replace(postings=postings)
-
-
-def _union_postings(postings_lists):
-    """
-    Merge several lists of postings by order of start time.
-    """
-    result = []
+def group_results_by_document(
+    results: List[Iterable[CaptionIndex.Document]]
+) -> Tuple[int, List[List[CaptionIndex.Posting]]]:
+    """Group postings of documents from multiple results"""
     pq = []
-    for i, ps in enumerate(postings_lists):
-        assert isinstance(ps, deque)
-        ps_head = ps.popleft()
-        pq.append((ps_head.start, i, ps_head, ps))
-    heapq.heapify(pq)
-
-    while len(pq) > 0:
-        _, i, ps_head, ps = heapq.heappop(pq)
-        result.append(ps_head)
-        if len(ps) > 0:
-            ps_head = ps.popleft()
-            heapq.heappush(pq, (ps_head.start, i, ps_head, ps))
-    return result
-
-
-def _union_search_results(document_results):
-    """
-    Merge several iterators of document results and their postings,
-    deoverlapping as necessary.
-    """
-    pq = []
-    for i, dr in enumerate(document_results):
+    for i, docs in enumerate(results):
         try:
-            dr_head = next(dr)
-            pq.append((dr_head.id, i, dr_head, dr))
+            doc_head = next(docs)
+            pq.append((doc_head.id, i, doc_head, docs))
         except StopIteration:
             pass
     heapq.heapify(pq)
@@ -127,26 +138,21 @@ def _union_search_results(document_results):
         curr_doc_postings_lists = []
         while len(pq) > 0:
             if pq[0][0] == curr_doc_head.id:
-                _, i, dr_head, dr = heapq.heappop(pq)
-                curr_doc_postings_lists.append(dr_head.postings)
+                _, i, doc_head, docs = heapq.heappop(pq)
+                curr_doc_postings_lists.append(doc_head.postings)
                 try:
-                    dr_head = next(dr)
-                    heapq.heappush(pq, (dr_head.id, i, dr_head, dr))
+                    doc_head = next(docs)
+                    heapq.heappush(pq, (doc_head.id, i, doc_head, docs))
                 except StopIteration:
                     pass
             else:
                 break
-
-        if len(curr_doc_postings_lists) == 1:
-            yield curr_doc_head
-        else:
-            new_postings = _deoverlap_postings(
-                _union_postings(curr_doc_postings_lists))
-            yield curr_doc_head._replace(postings=new_postings)
+        yield curr_doc_head.id, curr_doc_postings_lists
 
 
-def topic_search(phrases: List, index: CaptionIndex, window_size=30,
-                 documents=None):
+def topic_search(
+    phrases: List, index: CaptionIndex, window_size=30, documents=None
+) -> Iterable[CaptionIndex.Document]:
     """
     Search for time segments where any of the phrases occur with time windows
     dilated by window size seconds.
@@ -157,7 +163,13 @@ def topic_search(phrases: List, index: CaptionIndex, window_size=30,
     for phrase in phrases:
         try:
             result = index.search(phrase, documents=documents)
-            results.append(_dilate_search_results(index, result, window_size))
+            results.append(result)
         except (KeyError, IndexError, ValueError):
             pass
-    return _union_search_results(results)
+    for doc_id, posting_lists in group_results_by_document(results):
+        duration = index.document_duration(doc_id)
+        postings = PostingUtil.deoverlap(
+            PostingUtil.dilate(
+                PostingUtil.union(posting_lists),
+                window_size, duration))
+        yield CaptionIndex.Document(id=doc_id, postings=postings)

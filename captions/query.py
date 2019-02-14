@@ -54,6 +54,7 @@ from typing import Dict, List, Iterable
 from parsimonious.grammar import Grammar, NodeVisitor
 
 from .index import Lexicon, CaptionIndex
+from .util import PostingUtil, group_results_by_document
 
 
 GRAMMAR = Grammar(r"""
@@ -87,61 +88,12 @@ GRAMMAR = Grammar(r"""
 """)
 
 
-def _group_by_document(results: List[Iterable['CaptionIndex.Document']]):
-    """Group postings of documents."""
-    pq = []
-    for i, docs in enumerate(results):
-        try:
-            doc_head = next(docs)
-            pq.append((doc_head.id, i, doc_head, docs))
-        except StopIteration:
-            pass
-    heapq.heapify(pq)
-
-    while len(pq) > 0:
-        curr_doc_head = pq[0][2]
-        curr_doc_postings_lists = []
-        while len(pq) > 0:
-            if pq[0][0] == curr_doc_head.id:
-                _, i, doc_head, docs = heapq.heappop(pq)
-                curr_doc_postings_lists.append(doc_head.postings)
-                try:
-                    doc_head = next(docs)
-                    heapq.heappush(pq, (doc_head.id, i, doc_head, docs))
-                except StopIteration:
-                    pass
-            else:
-                break
-        yield curr_doc_head.id, curr_doc_postings_lists
-
-
-def _union_postings(postings):
-    """Merge several lists of postings by order of idx."""
-    result = []
-    pq = []
-    for i, ps_list in enumerate(postings):
-        ps_iter = iter(ps_list)
-        ps_head = next(ps_iter)
-        pq.append((ps_head.start, i, ps_head, ps_iter))
-    heapq.heapify(pq)
-
-    while len(pq) > 0:
-        _, i, ps_head, ps_iter = heapq.heappop(pq)
-        result.append(ps_head)
-        try:
-            ps_head = next(ps_iter)
-            heapq.heappush(pq, (ps_head.start, i, ps_head, ps_iter))
-        except StopIteration:
-            pass
-    return result
-
-
 class _Expr(ABC):
 
     Context = namedtuple('Context', ['lexicon', 'index', 'documents'])
 
     @abstractmethod
-    def eval(self, context) -> Iterable['CaptionIndex.Document']:
+    def eval(self, context) -> Iterable[CaptionIndex.Document]:
         raise NotImplementedError()
 
     @abstractproperty
@@ -200,9 +152,9 @@ class _Phrase(_Expr):
                 tokens.pop()
         helper(0, deque())
 
-        for doc_id, grouped_postings in _group_by_document(results):
+        for doc_id, grouped_postings in group_results_by_document(results):
             yield CaptionIndex.Document(
-                id=doc_id, postings=_union_postings(grouped_postings))
+                id=doc_id, postings=PostingUtil.union(grouped_postings))
 
 
 def _dist_posting(p1, p2):
@@ -292,10 +244,10 @@ class _Or(_JoinExpr):
 
     def eval(self, context):
         results = [c.eval(context) for c in self.children]
-        for doc_id, grouped_postings in _group_by_document(results):
+        for doc_id, grouped_postings in group_results_by_document(results):
             yield CaptionIndex.Document(
                 id=doc_id,
-                postings=_union_postings(grouped_postings)
+                postings=PostingUtil.union(grouped_postings)
             )
 
 
@@ -316,8 +268,8 @@ class _Not(_JoinExpr):
             documents=[d.id for d in child0_results])
         other_results = [c.eval(other_context) for c in self.children[1:]]
         other_postings = {
-            doc_id: _union_postings(grouped_postings)
-            for doc_id, grouped_postings in _group_by_document(other_results)
+            doc_id: PostingUtil.union(ps_lists)
+            for doc_id, ps_lists in group_results_by_document(other_results)
         }
 
         # TODO: this is a silly way to join
@@ -339,7 +291,7 @@ DEFAULT_AND_THRESH = 5
 DEFAULT_NOT_THRESH = 5
 
 
-class QueryParser(NodeVisitor):
+class _QueryParser(NodeVisitor):
 
     def __init__(self, constants={}):
         self.grammar = GRAMMAR
@@ -416,9 +368,11 @@ class QueryParser(NodeVisitor):
 
 
 class Query(object):
+    """Parse and execute queries"""
 
     def __init__(self, raw_query: str, **config):
-        self._tree = QueryParser(config).parse(raw_query)
+        self._tree = _QueryParser(config).parse(raw_query)
 
-    def execute(self, lexicon: Lexicon, index: CaptionIndex, documents=None):
+    def execute(self, lexicon: Lexicon, index: CaptionIndex,
+                documents=None) -> Iterable[CaptionIndex.Document]:
         return self._tree.eval(_Expr.Context(lexicon, index, documents))
