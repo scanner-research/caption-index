@@ -88,24 +88,28 @@ class PostingUtil(object):
         postings: Iterable[CaptionIndex.Posting], window: int, duration: float
     ) -> List[CaptionIndex.Posting]:
         """Dilate start and end times"""
-        return [
-            p._replace(
-                start=max(p.start - window, 0),
-                end=min(p.end + window, duration)
-            ) for p in postings]
+        return [p._replace(
+                    start=max(p.start - window, 0),
+                    end=min(p.end + window, duration)
+                ) for p in postings]
 
     @staticmethod
     def union(
         postings_lists: List[Iterable[CaptionIndex.Posting]], use_time=True
     ) -> List[CaptionIndex.Posting]:
         """Merge several lists of postings by order of idx."""
+        def get_priority(p):
+            if use_time:
+                return (p.start, p.idx)
+            else:
+                return (p.idx, p.start)
+
         result = []
         pq = []
         for i, ps_list in enumerate(postings_lists):
             ps_iter = iter(ps_list)
             ps_head = next(ps_iter)
-            priority = ps_head.start if use_time else ps_head.idx
-            pq.append((priority, i, ps_head, ps_iter))
+            pq.append((get_priority(ps_head), i, ps_head, ps_iter))
         heapq.heapify(pq)
 
         while len(pq) > 0:
@@ -113,8 +117,7 @@ class PostingUtil(object):
             result.append(ps_head)
             try:
                 ps_head = next(ps_iter)
-                priority = ps_head.start if use_time else ps_head.idx
-                heapq.heappush(pq, (priority, i, ps_head, ps_iter))
+                heapq.heappush(pq, (get_priority(ps_head), i, ps_head, ps_iter))
             except StopIteration:
                 pass
         return result
