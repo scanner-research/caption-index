@@ -335,8 +335,8 @@ class _Not(_JoinExpr):
                 yield CaptionIndex.Document(id=d.id, postings=postings)
 
 
-DEFAULT_AND_THRESH = 60
-DEFAULT_NOT_THRESH = 60
+DEFAULT_AND_THRESH = 5
+DEFAULT_NOT_THRESH = 5
 
 
 class QueryParser(NodeVisitor):
