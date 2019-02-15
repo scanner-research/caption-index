@@ -21,7 +21,9 @@ def test_query_parser():
         'the & (red lobster | (soaring & bald eagle))',
         '[the] red [kittens]',
         '(the & (red | blue) & (cat ^ sat on)) | a [green mat]',
-        '(the & (red | blue) & (cat ^ sat on :: 24) :: 12) | a [green mat]'
+        '(the & (red | blue) & (cat ^ sat on :: 24) :: 12) | a [green mat]',
+        'U.S | U.K',
+        'red-black tree'
     ]
 
     for raw_query in queries:

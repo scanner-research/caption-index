@@ -58,9 +58,11 @@ from .util import PostingUtil, group_results_by_document
 
 
 GRAMMAR = Grammar(r"""
+    expr_root = sp? expr_group sp?
+
     expr_group = and / or / not / expr
     expr = expr_paren / tokens_root
-    expr_paren = "(" sp? expr_group sp? ")"
+    expr_paren = sp? "(" sp? expr_group sp? ")" sp?
 
     and = expr more_and threshold?
     more_and = (sp? "&" sp? expr)+
@@ -82,7 +84,7 @@ GRAMMAR = Grammar(r"""
     tokens = token more_tokens
     more_tokens = (sp token)*
 
-    token = ~r"[\w\-\_\$\!]+"
+    token = ~r"[\.\w\-\_\$\!]+"
 
     sp = ~r"\s+"
 """)
@@ -300,6 +302,10 @@ class _QueryParser(NodeVisitor):
     visit_more_and = visit_more_or = visit_more_not = visit_more_tokens = \
         lambda a, b, c: c
 
+    def visit_expr_root(self, node, children):
+        assert len(children) == 3
+        return children[1]
+
     def visit_expr_group(self, node, children):
         assert len(children) == 1
         return children[0]
@@ -309,8 +315,8 @@ class _QueryParser(NodeVisitor):
         return children[0]
 
     def visit_expr_paren(self, node, children):
-        assert len(children) == 5
-        return children[2]
+        assert len(children) == 7
+        return children[3]
 
     def visit_and(self, node, children):
         assert len(children) == 3
