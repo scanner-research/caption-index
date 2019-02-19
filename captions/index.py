@@ -102,11 +102,11 @@ class Lexicon(object):
             results.update(self._lemmas.get(lem, []))
         return results
 
-    def decode(self, key):
+    def decode(self, key, default=None):
         try:
             return self.__getitem__(key).token
         except (KeyError, IndexError):
-            return Lexicon.UNKNOWN_TOKEN
+            return default if default is not None else Lexicon.UNKNOWN_TOKEN
 
     def store(self, path: str):
         """Save the lexicon as a TSV file"""

@@ -12,6 +12,7 @@ from subprocess import check_call
 
 import captions as captions
 import captions.util as util
+import captions.vtt as vtt
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)) + '/../scripts')
 
@@ -270,3 +271,11 @@ def test_script_build_ngrams_and_lexicon():
     test_phrase(('PRESIDENT', 'OF', 'THE', 'UNITED', 'STATES'))
 
     pmi_lexicon.main(idx_dir, ['UNITED', 'STATES'], 5, 30, 10)
+
+
+def test_vtt():
+    idx_dir = os.path.join(TMP_DIR, TEST_INDEX_SUBDIR)
+    idx_path = os.path.join(idx_dir, 'index.bin')
+    documents, lexicon = _get_docs_and_lex(idx_dir)
+    with captions.CaptionIndex(idx_path, lexicon, documents) as index:
+        print(vtt.get_vtt(lexicon, index, 1))
