@@ -85,7 +85,7 @@ class Lexicon(object):
         self._lemmatizer = lemmatizer
         self._lemmas = lemmas
 
-    def similar(self, key):
+    def similar(self, key) -> Set[int]:
         """Return words that are similar (share the same lemma)"""
         if self._lemmatizer is None:
             self.__lemmas_init()
@@ -102,7 +102,7 @@ class Lexicon(object):
             results.update(self._lemmas.get(lem, []))
         return results
 
-    def decode(self, key, default=None):
+    def decode(self, key, default=None) -> str:
         try:
             return self.__getitem__(key).token
         except (KeyError, IndexError):
@@ -184,6 +184,13 @@ class Documents(object):
 
     def __len__(self):
         return len(self._docs)
+
+    def prefix(self, key: str) -> List['Documents.Document']:
+        results = []
+        for d in self._docs:
+            if d.name.startswith(key):
+                results.append(d)
+        return results
 
     def store(self, path: str):
         """Save the document list as TSV formatted file"""
