@@ -4,26 +4,46 @@ Text search query language.
 [ Grammar ]
 
 Phrases:
-  the ducks        find all instances of the "the ducks"
+  the ducks             find all instances of the "the ducks" (a bigram)
 
 Query Expansion: [] brackets
-  [the ducks]     "the ducks" or "the duck"
+  [the ducks]           "the ducks" or "the duck".
+                        Equivalent to ("the duck" | "the ducks").
+
+Expressions:
+  An expression can be:
+    - a phrase  (e.g., "the ducks")
+    - a phrase with query expansion (e.g., [the ducks])
+    - composition of expressions with the operators below
+  The result of evaluating an expression is always a list of locations where
+  phrases that match the expression appear. There is no merging of phrases
+  in the text query language.
 
 Or: |
-  e1 | e2 | ...   expression1 or expression2
+  e1 | e2 | e3 | ...    expr1 or expr2 or expr3
 
 And: &
-  e1 & e2 & ...   expression1 and expression2 nearby
-  e1 & e2 :: t    same as above, but with t seconds as the threshold
+  e1 & e2 & e3 & ...    expr1, expr2, and expr3 where they are nearby
+                        I.e., instances of e1, e2, e3 that are contained in
+                        a window that contains an instance of e1, e2, and e3
 
-Not: &
-  e1 ^ e2 ^ ...   expression1, not near expression2
-  e1 ^ e2 :: t    same as above, but with t seconds as the threshold
+  e1 & e2 & e3 :: t     same as above, but with t seconds as the window
+                        threshold
+
+Not near: ^
+  e1 ^ e2 ^ e3 ...      expr1, not near expr2 and not near expr3
+                        I.e., instances of e1 not in any window containing
+                        e1 or e2.
+
+                        This is equivalent to (e1 ^ (e2 | e3)) and
+                        ((e1 ^ e2) ^ e3).
+
+  e1 ^ e2 ^ e3 :: t     same as above, but with t seconds as the window
 
 Groups: ()
   (expr)          evaluate expr as a group
 
-Caveats
+[ Group caveats ]
     &, |, and ^ cannot be combined in the same group. For instance,
     "(a & b | c)" is invalid and should be written as "(a & (b | c))" or
     "((a & b) | c)".
@@ -34,16 +54,17 @@ Caveats
     All instances of the "united states".
 
   united | states
-    All instances of "united" or "states".
+    All instances of "united" and "states".
 
   united & states
-    All instances of "united" and "states" nearby.
+    All instances of "united" and "states" where each "united" is near a
+    "states" and each "states" is near a "united".
 
   united ^ states
     All instances of "united", without "states" nearby.
 
-  united ^ (states | kingdom)
-    All instances of "united", without "states" or "kingdom" nearby.
+  united ^ (states | kingdom) ==equiv== united ^ states ^ kingdom)
+    All instances of "united", without "states" and without "kingdom" nearby.
 
 """
 
