@@ -30,6 +30,8 @@ And: &
   e1 & e2 & e3 :: t     same as above, but with t seconds as the window
                         threshold
 
+  e1 & e2 & e3 // w     same as above, but with w tokens as the threshold
+
 Not near: ^
   e1 ^ e2 ^ e3 ...      expr1, not near expr2 and not near expr3
                         I.e., instances of e1 not in any window containing
@@ -39,6 +41,8 @@ Not near: ^
                         ((e1 ^ e2) ^ e3).
 
   e1 ^ e2 ^ e3 :: t     same as above, but with t seconds as the window
+
+  e1 ^ e2 ^ e3 // w     same as above, but with w tokens as the threshold
 
 Groups: ()
   (expr)          evaluate expr as a group
@@ -94,7 +98,8 @@ GRAMMAR = Grammar(r"""
     not = expr more_not threshold?
     more_not = (sp? "^" sp?  expr)+
 
-    threshold = sp? "::" sp? integer
+    threshold = sp? threshold_type sp? integer
+    threshold_type = "::" / "//"
     integer = ~r"\d+"
 
     tokens_root = tokens_list more_tokens_root
@@ -129,10 +134,11 @@ class _Expr(ABC):
 
 class _JoinExpr(_Expr):
 
-    def __init__(self, children, threshold):
+    def __init__(self, children, threshold, threshold_type):
         assert all(isinstance(c, _Expr) for c in children)
         self.children = children
         self.threshold = threshold
+        self.threshold_type = threshold_type
 
 
 class _Phrase(_Expr):
@@ -180,10 +186,16 @@ class _Phrase(_Expr):
                 id=doc_id, postings=PostingUtil.union(grouped_postings))
 
 
-def _dist_posting(p1, p2):
+def _dist_time_posting(p1, p2):
     return (
         max(p2.start - p1.end, 0)
-        if p1.start <= p2.start else _dist_posting(p2, p1))
+        if p1.start <= p2.start else _dist_time_posting(p2, p1))
+
+
+def _dist_idx_posting(p1, p2):
+    return (
+        max(p2.idx - (p1.idx + p1.len), 0)
+        if p1.idx <= p2.idx else _dist_idx_posting(p2, p1))
 
 
 class _And(_JoinExpr):
@@ -192,7 +204,9 @@ class _And(_JoinExpr):
     def _pprint_data(self):
         return {
             '1. op': 'And',
-            '2. thresh': '{} seconds'.format(self.threshold),
+            '2. thresh': '{} {}'.format(
+                self.threshold,
+                'seconds' if self.threshold_type == 't' else 'tokens'),
             '3. children': [c._pprint_data for c in self.children]
         }
 
@@ -203,6 +217,10 @@ class _And(_JoinExpr):
             doc_ids = [d.id for d in child_results]
             context = context._replace(documents=doc_ids)
             results.append({d.id: d.postings for d in child_results})
+
+        dist_fn = (
+            _dist_time_posting if self.threshold_type == 't' else
+            _dist_idx_posting)
 
         n = len(results)
         for doc_id in sorted(doc_ids):
@@ -226,14 +244,14 @@ class _And(_JoinExpr):
                 for elem in pq:
                     ps_cmp = elem[2]
                     j = elem[1]
-                    if _dist_posting(ps_head, ps_cmp) < self.threshold:
+                    if dist_fn(ps_head, ps_cmp) < self.threshold:
                         near_i.add(j)
                 if len(near_i) < n - 1:
                     for j in range(n):
                         if j != i and j not in near_i:
                             ps_cmp = ps_prev[j]
                             if ps_cmp is not None:
-                                if _dist_posting(ps_head, ps_cmp) < self.threshold:
+                                if dist_fn(ps_head, ps_cmp) < self.threshold:
                                     near_i.add(j)
                             else:
                                 # No solution
@@ -280,7 +298,9 @@ class _Not(_JoinExpr):
     def _pprint_data(self):
         return {
             '1. op': 'Not',
-            '2. thresh': '{} seconds'.format(self.threshold),
+            '2. thresh': '{} {}'.format(
+                self.threshold,
+                'seconds' if self.threshold_type == 't' else 'tokens'),
             '3. children': [c._pprint_data for c in self.children]
         }
 
@@ -295,14 +315,16 @@ class _Not(_JoinExpr):
             for doc_id, ps_lists in group_results_by_document(other_results)
         }
 
+        dist_fn = (
+            _dist_time_posting if self.threshold_type == 't' else
+            _dist_idx_posting)
+
         # TODO: this is a silly way to join
         for d in child0_results:
             postings = []
             for p1 in d.postings:
-                p1_start_t = p1.start - self.threshold
-                p1_end_t = p1.end + self.threshold
                 for p2 in other_postings.get(d.id, []):
-                    if min(p1_end_t, p2.end) - max(p1_start_t, p2.start) >= 0:
+                    if dist_fn(p1, p2) >= self.threshold:
                         break
                 else:
                     postings.append(p1)
@@ -342,28 +364,42 @@ class _QueryParser(NodeVisitor):
     def visit_and(self, node, children):
         assert len(children) == 3
         if children[2] is None:
-            threshold = self._constants.get('and_threshold', DEFAULT_AND_THRESH)
+            threshold = self._constants.get(
+                'and_threshold', DEFAULT_AND_THRESH)
+            threshold_type = 't'
         else:
-            threshold = children[2]
+            threshold_type, threshold = children[2]
             assert isinstance(threshold, int)
-        return _And([children[0], *children[1]], threshold)
+            assert isinstance(threshold_type, str)
+        return _And([children[0], *children[1]], threshold, threshold_type)
 
     def visit_or(self, node, children):
         assert len(children) == 2
-        return _Or([children[0], *children[1]], None)
+        return _Or([children[0], *children[1]], None, None)
 
     def visit_not(self, node, children):
         assert len(children) == 3
         if children[2] is None:
-            threshold = self._constants.get('not_threshold', DEFAULT_NOT_THRESH)
+            threshold = self._constants.get(
+                'not_threshold', DEFAULT_NOT_THRESH)
+            threshold_type = 't'
         else:
-            threshold = children[2]
+            threshold_type, threshold = children[2]
             assert isinstance(threshold, int)
-        return _Not([children[0], *children[1]], threshold)
+            assert isinstance(threshold_type, str)
+        return _Not([children[0], *children[1]], threshold, threshold_type)
 
     def visit_threshold(self, node, children):
         assert len(children) == 4
-        return children[3]
+        if children[1] == '//':
+            return ('w', children[3])
+        elif children[1] == '::':
+            return ('t', children[3])
+        else:
+            raise Exception('Invalid threshold token')
+
+    def visit_threshold_type(self, node, children):
+        return node.text
 
     def visit_integer(self, node, children):
         return int(node.text)

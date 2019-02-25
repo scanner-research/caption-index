@@ -15,13 +15,16 @@ def test_query_parser():
         '(hello world)',
         'hello & world',
         'hello & world :: 15',
+        'hello & world // 15',
         'hello | world',
         'hello ^ world',
         'hello ^ world :: 123',
+        'hello ^ world // 123',
         'the & (red lobster | (soaring & bald eagle))',
         '[the] red [kittens]',
         '(the & (red | blue) & (cat ^ sat on)) | a [green mat]',
         '(the & (red | blue) & (cat ^ sat on :: 24) :: 12) | a [green mat]',
+        '(the & (red | blue) & (cat ^ sat on // 24) // 12) | a [green mat]',
         'U.S | U.K',
         'red-black tree'
     ]
@@ -30,4 +33,3 @@ def test_query_parser():
         print('Raw query:', raw_query)
         q = query.Query(raw_query)
         print(yaml.dump(q._tree._pprint_data, indent=4))
-        print()
