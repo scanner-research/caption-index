@@ -345,13 +345,10 @@ class CaptionIndex(object):
         assert isinstance(documents, Documents)
         self._lexicon = lexicon
         self._documents = documents
+        self._tokenizer = tokenizer
 
         if binary_format is None:
             binary_format = BinaryFormat.default()
-
-        if tokenizer is None:
-            tokenizer = default_tokenizer()
-        self._tokenizer = tokenizer
 
         self._rs_index = RsCaptionIndex(
             path, datum_size=binary_format.datum_bytes,
@@ -391,6 +388,11 @@ class CaptionIndex(object):
         else:
             return self._lexicon[word].id
 
+    def tokenizer(self):
+        if self._tokenizer is None:
+            self._tokenizer = default_tokenizer()
+        return self._tokenizer
+
     @__require_open_index
     def document_length(self, doc) -> int:
         """Get the length of a document in tokens"""
@@ -405,7 +407,7 @@ class CaptionIndex(object):
 
     def __tokenize_text(self, text):
         if isinstance(text, str):
-            tokens = list(self._tokenizer.tokens(text.strip()))
+            tokens = list(self.tokenizer().tokens(text.strip()))
             if len(tokens) == 0:
                 raise ValueError('No words in input')
             for t in tokens:
