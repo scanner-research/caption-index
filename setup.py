@@ -20,6 +20,7 @@ install_requires = [
     'parsimonious>=0.8.1',
     'pysrt>=1.1.1',
     'pytest>=4.0.1',
+    'PyYAML>=3.13',
     'spacy>=2.0.18',
     'termcolor>=1.1.0',
     'tqdm>=4.28.1',
