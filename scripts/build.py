@@ -238,13 +238,13 @@ def index_all_docs(doc_dir: str, documents: Documents, lexicon: Lexicon,
         for doc in documents:
             doc_path = os.path.join(doc_dir, doc.name)
             out_path = os.path.join(tmp_dir, str(doc.id))
-            async = pool.apply_async(
+            async_result = pool.apply_async(
                 index_single_doc, (doc.id, doc_path, out_path),
                 callback=progress)
-            results.append((async, out_path))
+            results.append((async_result, out_path))
 
-        for async, _ in results:
-            async.get()
+        for async_result, _ in results:
+            async_result.get()
 
         # Cat the files together (in batches to avoid too many args)
         doc_index_paths = [x for _, x in results]
