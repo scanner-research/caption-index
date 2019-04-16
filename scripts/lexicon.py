@@ -59,10 +59,7 @@ def run_search(query, lexicon, index, ngram_frequency, n,
     for q in query.split(','):
         q = q.strip()
         if len(q) > 0:
-            try:
-                query_list.append(default_tokenizer().tokens(q))
-            except KeyError:
-                print('Not found:', q)
+            query_list.append(default_tokenizer().tokens(q))
     result = pmi.compute(query_list, index, ngram_frequency, n, window_size)
     elapsed_time = time.time() - start_time
 

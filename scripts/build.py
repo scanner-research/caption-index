@@ -137,7 +137,7 @@ def read_single_doc(doc_path: str, lexicon: Lexicon):
                 try:
                     try:
                         token = lexicon[t]
-                    except KeyError:
+                    except Lexicon.WordDoesNotExist:
                         print('Unknown token: {}'.format(t))
                         continue
                     doc_inv_index[token.id].append((doc_position, start, end))

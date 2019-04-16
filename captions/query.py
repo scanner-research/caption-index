@@ -166,7 +166,10 @@ class _Phrase(_Expr):
 
         def helper(i, tokens):
             if i == len(self.tokens):
-                results.append(context.index.ngram_search(*tokens, **kwargs))
+                try:
+                    results.append(context.index.ngram_search(*tokens, **kwargs))
+                except Lexicon.WordDoesNotExist:
+                    pass
                 return
             t = self.tokens[i]
             if t.expand:

@@ -39,6 +39,9 @@ class Lexicon(object):
             'count',    # Number of occurrences
         ])
 
+    class WordDoesNotExist(Exception):
+        pass
+
     def __init__(self, words):
         """List of words, where w.id is the index in the list"""
         assert isinstance(words, list)
@@ -56,17 +59,23 @@ class Lexicon(object):
 
     def __getitem__(self, key):
         if isinstance(key, int):
-            # Get word by id (IndexError)
-            return self._words[key]
+            # Get word by id
+            try:
+                return self._words[key]
+            except IndexError:
+                raise Lexicon.WordDoesNotExist('id={}'.format(key))
         elif isinstance(key, str):
-            # Get word by token (KeyError)
-            return self._inverse[key]
+            # Get word by token
+            try:
+                return self._inverse[key]
+            except KeyError:
+                raise Lexicon.WordDoesNotExist(key)
         raise TypeError('Not supported for {}'.format(type(key)))
 
     def __contains__(self, key):
         try:
             self.__getitem__(key)
-        except (KeyError, IndexError):
+        except Lexicon.WordDoesNotExist:
             return False
         return True
 
@@ -105,7 +114,7 @@ class Lexicon(object):
     def decode(self, key, default=None) -> str:
         try:
             return self.__getitem__(key).token
-        except (KeyError, IndexError):
+        except Lexicon.WordDoesNotExist:
             return default if default is not None else Lexicon.UNKNOWN_TOKEN
 
     def store(self, path: str):
@@ -154,6 +163,9 @@ class Documents(object):
 
     Document = namedtuple('Document', ['id', 'name'])
 
+    class DocumentDoesNotExist(Exception):
+        pass
+
     def __init__(self, docs):
         """List of Documents, where index is the id"""
         assert all(i == d.id for i, d in enumerate(docs))
@@ -165,20 +177,23 @@ class Documents(object):
     def __getitem__(self, key):
         if isinstance(key, int):
             # Get doc name by id (IndexError)
-            return self._docs[key]
+            try:
+                return self._docs[key]
+            except IndexError:
+                raise Documents.DocumentDoesNotExist('id={}'.format(key))
         elif isinstance(key, str):
             # Get doc id by name (KeyError)
             for d in self._docs:
                 if d.name == key:
                     return d.id
             else:
-                raise KeyError('No document named {}'.format(key))
+                raise Documents.DocumentDoesNotExist(key)
         raise TypeError('Not supported for {}'.format(type(key)))
 
     def __contains__(self, key):
         try:
             self.__getitem__(key)
-        except (KeyError, IndexError):
+        except Documents.DocumentDoesNotExist:
             return False
         return True
 
@@ -576,6 +591,9 @@ class NgramFrequency(object):
             ...
     """
 
+    class NgramDoesNotExist(Exception):
+        pass
+
     def __init__(self, path, lexicon, tokenizer=None):
         """Dictionary of ngram to frequency"""
         assert isinstance(path, str)
@@ -597,16 +615,22 @@ class NgramFrequency(object):
             key = tuple(self._tokenizer.tokens(key.strip()))
         denom = self._totals[len(key) - 1]
         if isinstance(key[0], int):
-            return self._counts[key] / denom
+            try:
+                return self._counts[key] / denom
+            except KeyError:
+                raise NgramFrequency.NgramDoesNotExist(repr(key))
         elif isinstance(key[0], str):
             key = tuple(self._lexicon[k].id for k in key)
-            return self._counts[key] / denom
+            try:
+                return self._counts[key] / denom
+            except KeyError:
+                raise NgramFrequency.NgramDoesNotExist(repr(key))
         raise TypeError('Not supported for {}'.format(type(key)))
 
     def __contains__(self, key):
         try:
             self.__getitem__(key)
-        except (KeyError, IndexError):
+        except NgramFrequency.NgramDoesNotExist:
             return False
         return True
 
