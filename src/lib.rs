@@ -200,7 +200,7 @@ impl _RsCaptionIndex {
         postings
     }
 
-    fn lookup_time_int(&self, d: &Document, ms: Millis) -> usize {
+    fn lookup_time_int(&self, d: &Document, ms: Millis) -> Option<usize> {
         let mut min_idx: usize = 0;
         let mut max_idx = d.time_int_count as usize;
         let base_index_ofs = d.base_offset + d.time_index_offset;
@@ -218,7 +218,11 @@ impl _RsCaptionIndex {
                 min_idx = pivot;
             }
         }
-        min_idx
+        if min_idx == (d.time_int_count as usize) {
+            None
+        } else {
+            Some(min_idx)
+        }
     }
 }
 
@@ -542,30 +546,35 @@ impl RsCaptionIndex {
         match self._internal.docs.get(&doc_id) {
             Some(d) => {
                 let mut locations = vec![];
-                let mut start_idx = self._internal.lookup_time_int(d, start_ms);
-                if start_idx > 0 {
-                    start_idx -= 1;
-                }
-                let end_ms = if ms_to_s(d.duration) < end {d.duration} else {s_to_ms(end)};
-                let base_index_ofs = d.base_offset + d.time_index_offset;
-                for i in start_idx..(d.time_int_count as usize) {
-                    let ofs = i * posting_size + base_index_ofs;
-                    let time_int = self._internal.read_time_int(ofs);
-                    if cmp::min(end_ms, time_int.1) >= cmp::max(start_ms, time_int.0) {
-                        // Non-zero overlap
-                        let pos = self._internal.read_datum(ofs + time_int_size) as usize;
-                        let next_pos: usize = if i + 1 < (d.time_int_count as usize) {
-                            self._internal.read_datum(
-                                ofs + posting_size + time_int_size) as usize
-                        } else {d.length};
-                        assert!(next_pos >= pos, "postions are not non-decreasing");
-                        locations.push(
-                            (ms_to_s(time_int.0), ms_to_s(time_int.1), pos, next_pos - pos))
-                    }
-                    if time_int.0 > end_ms {
-                        break;
-                    }
-                }
+                match self._internal.lookup_time_int(d, start_ms) {
+                    Some(start_idx_immut) => {
+                        let mut start_idx = start_idx_immut;
+                        if start_idx > 0 {
+                            start_idx -= 1;
+                        }
+                        let end_ms = if ms_to_s(d.duration) < end {d.duration} else {s_to_ms(end)};
+                        let base_index_ofs = d.base_offset + d.time_index_offset;
+                        for i in start_idx..(d.time_int_count as usize) {
+                            let ofs = i * posting_size + base_index_ofs;
+                            let time_int = self._internal.read_time_int(ofs);
+                            if cmp::min(end_ms, time_int.1) >= cmp::max(start_ms, time_int.0) {
+                                // Non-zero overlap
+                                let pos = self._internal.read_datum(ofs + time_int_size) as usize;
+                                let next_pos: usize = if i + 1 < (d.time_int_count as usize) {
+                                    self._internal.read_datum(
+                                        ofs + posting_size + time_int_size) as usize
+                                } else {d.length};
+                                assert!(next_pos >= pos, "postions are not non-decreasing");
+                                locations.push(
+                                    (ms_to_s(time_int.0), ms_to_s(time_int.1), pos, next_pos - pos))
+                            }
+                            if time_int.0 > end_ms {
+                                break;
+                            }
+                        }
+                    },
+                    None => ()
+                };
                 Ok(locations)
             },
             None => Err(exceptions::Exception::py_err("Document not found"))
@@ -578,10 +587,14 @@ impl RsCaptionIndex {
         }
         match self._internal.docs.get(&doc_id) {
             Some(d) => Ok({
-                let idx = self._internal.lookup_time_int(d, s_to_ms(time));
-                let ofs = d.base_offset + d.time_index_offset +
-                    idx * self._internal.posting_size() + self._internal.time_int_size();
-                self._internal.read_datum(ofs) as Position
+                match self._internal.lookup_time_int(d, s_to_ms(time)) {
+                    Some(idx) => {
+                        let ofs = d.base_offset + d.time_index_offset +
+                            idx * self._internal.posting_size() + self._internal.time_int_size();
+                        self._internal.read_datum(ofs) as Position
+                    },
+                    None => d.length as Position
+                }
             }),
             None => Err(exceptions::ValueError::py_err("Document not found"))
         }
