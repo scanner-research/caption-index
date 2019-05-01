@@ -5,12 +5,12 @@ Indexes for srt files
 import csv
 import pickle
 from abc import ABC, abstractmethod, abstractproperty
-from collections import namedtuple, deque
-from typing import Dict, Iterable, List, Set, Tuple
+from collections import deque
+from typing import Dict, Iterable, List, Set, Tuple, NamedTuple
 
 from .lemmatize import default_lemmatizer
 from .tokenize import default_tokenizer
-from .rs_captions import RsCaptionIndex, RsMetadataIndex
+from .rs_captions import RsCaptionIndex, RsMetadataIndex    # type: ignore
 
 
 class Lexicon(object):
@@ -32,12 +32,10 @@ class Lexicon(object):
 
     UNKNOWN_TOKEN = '<UNKNOWN>'
 
-    Word = namedtuple(
-        'Word', [
-            'id',       # Token id
-            'token',    # String representations
-            'count',    # Number of occurrences
-        ])
+    class Word(NamedTuple):
+        id: int         # Token id
+        token: str      # String representation
+        count: int      # Number of occurrences
 
     class WordDoesNotExist(Exception):
         pass
@@ -161,7 +159,9 @@ class Documents(object):
             ...
     """
 
-    Document = namedtuple('Document', ['id', 'name'])
+    class Document(NamedTuple):
+        id: int
+        name: str
 
     class DocumentDoesNotExist(Exception):
         pass
@@ -236,12 +236,10 @@ class BinaryFormat(object):
         - byte
     """
 
-    Config = namedtuple(
-        'Config', [
-            'start_time_bytes',     # Number of bytes to encode start times
-            'end_time_bytes',       # Number of bytes to encode end - start
-            'datum_bytes',          # Number of bytes to encode other data
-        ])
+    class Config(NamedTuple):
+        start_time_bytes: int   # Number of bytes to encode start times
+        end_time_bytes: int     # Number of bytes to encode end - start
+        datum_bytes: int        # Number of bytes to encode other data
 
     def __init__(self, config):
         self._endian = 'little'
@@ -339,20 +337,16 @@ class CaptionIndex(object):
     """
 
     # A "posting" is an occurance of a token or n-gram
-    Posting = namedtuple(
-        'Posting', [
-            'start',        # Start time in seconds
-            'end',          # End time in seconds
-            'idx',          # Start position in document
-            'len',          # Number of tokens
-        ])
+    class Posting(NamedTuple):
+        start: float        # Start time in seconds
+        end: float          # End time in seconds
+        idx: int            # Start position in document
+        len: int            # Number of tokens
 
     # Document object with postings
-    Document = namedtuple(
-        'Document', [
-            'id',           # Document ID
-            'postings'      # List of locations
-        ])
+    class Document(NamedTuple):
+        id: int                                 # Document id
+        postings: List['CaptionIndex.Posting']  # List of locations
 
     def __init__(self, path: str, lexicon: Lexicon, documents: Documents,
                  binary_format=None, tokenizer=None, debug=False):

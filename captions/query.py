@@ -439,6 +439,7 @@ class Query(object):
     def __init__(self, raw_query: str, **config):
         self._tree = _QueryParser(config).parse(raw_query)
 
-    def execute(self, lexicon: Lexicon, index: CaptionIndex,
-                documents=None) -> Iterable[CaptionIndex.Document]:
+    def execute(
+        self, lexicon: Lexicon, index: CaptionIndex, documents=None
+    ) -> Iterable[CaptionIndex.Document]:
         return self._tree.eval(_Expr.Context(lexicon, index, documents))

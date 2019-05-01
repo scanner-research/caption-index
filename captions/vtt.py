@@ -5,12 +5,12 @@ Decode VTT from CaptionIndex
 from io import StringIO
 import math
 import re
-from typing import List
+from typing import List, Iterable, Union
 
 from .index import Lexicon, CaptionIndex, Documents
 
 
-def _format_time(t):
+def _format_time(t: float) -> str:
     millis = math.floor(t * 1000) % 1000
     seconds = math.floor(t) % 60
     minutes = math.floor(t / 60) % 60
@@ -19,7 +19,7 @@ def _format_time(t):
             hours, minutes, seconds, millis)
 
 
-def _untokenize(words):
+def _untokenize(words: Iterable[str]) -> str:
     text = ' '.join(words)
     step1 = text.replace("`` ", '"').replace(" ''", '"').replace('. . .',  '...')
     step2 = step1.replace(" ( ", " (").replace(" ) ", ") ")
@@ -31,8 +31,9 @@ def _untokenize(words):
     return step6.strip()
 
 
-def get_vtt(lexicon: Lexicon, index: CaptionIndex, document,
-            unknown_token='UNKNOWN') -> str:
+def get_vtt(lexicon: Lexicon, index: CaptionIndex,
+            document: Union[Documents.Document, int],
+            unknown_token: str = 'UNKNOWN') -> str:
     """Get document as a VTT string"""
     out = StringIO()
     out.write('WEBVTT\r\n\r\n')
