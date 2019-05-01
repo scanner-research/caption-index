@@ -6,10 +6,11 @@ import csv
 import pickle
 from abc import ABC, abstractmethod, abstractproperty
 from collections import deque
-from typing import Dict, Iterable, List, Set, Tuple, NamedTuple
+from typing import (
+    Callable, Dict, Iterable, List, Set, Tuple, NamedTuple, Union, Optional)
 
 from .lemmatize import default_lemmatizer
-from .tokenize import default_tokenizer
+from .tokenize import default_tokenizer, Tokenizer
 from .rs_captions import RsCaptionIndex, RsMetadataIndex    # type: ignore
 
 
@@ -40,6 +41,8 @@ class Lexicon(object):
     class WordDoesNotExist(Exception):
         pass
 
+    WordIdOrString = Union[str, int]
+
     def __init__(self, words):
         """List of words, where w.id is the index in the list"""
         assert isinstance(words, list)
@@ -55,7 +58,7 @@ class Lexicon(object):
         # Iterate lexicon in id order
         return self._words.__iter__()
 
-    def __getitem__(self, key):
+    def __getitem__(self, key: WordIdOrString) -> 'Lexicon.Word':
         if isinstance(key, int):
             # Get word by id
             try:
@@ -70,17 +73,17 @@ class Lexicon(object):
                 raise Lexicon.WordDoesNotExist(key)
         raise TypeError('Not supported for {}'.format(type(key)))
 
-    def __contains__(self, key):
+    def __contains__(self, key: WordIdOrString) -> bool:
         try:
             self.__getitem__(key)
         except Lexicon.WordDoesNotExist:
             return False
         return True
 
-    def __len__(self):
+    def __len__(self) -> int:
         return len(self._words)
 
-    def __lemmas_init(self):
+    def __lemmas_init(self) -> None:
         """Compute lemmas for every word"""
         lemmatizer = default_lemmatizer()
         lemmas = {}
@@ -92,7 +95,7 @@ class Lexicon(object):
         self._lemmatizer = lemmatizer
         self._lemmas = lemmas
 
-    def similar(self, key) -> Set[int]:
+    def similar(self, key: WordIdOrString) -> Set[int]:
         """Return words that are similar (share the same lemma)"""
         if self._lemmatizer is None:
             self.__lemmas_init()
@@ -109,19 +112,21 @@ class Lexicon(object):
             results.update(self._lemmas.get(lem, []))
         return results
 
-    def decode(self, key, default=None) -> str:
+    def decode(self, key: WordIdOrString,
+               default: Optional[str] = None) -> str:
         try:
             return self.__getitem__(key).token
         except Lexicon.WordDoesNotExist:
             return default if default is not None else Lexicon.UNKNOWN_TOKEN
 
-    def store(self, path: str):
+    def store(self, path: str) -> None:
         """Save the lexicon as a TSV file"""
         prev_w = None
         for w in self._words:
             if prev_w:
                 assert w.id > prev_w.id, 'Bad lexicon, not sorted by id'
-                assert w.token > prev_w.token, 'Bad lexicon, not sorted by token'
+                assert w.token > prev_w.token, \
+                    'Bad lexicon, not sorted by token'
             prev_w = w
 
         with open(path, 'w') as f:
@@ -130,7 +135,7 @@ class Lexicon(object):
                 tsv_writer.writerow([w.id, w.count, w.token])
 
     @staticmethod
-    def load(path: str):
+    def load(path: str) -> 'Lexicon':
         """Load a TSV formatted lexicon"""
         with open(path, 'r') as f:
             tsv_reader = csv.reader(f, delimiter='\t')
@@ -166,15 +171,19 @@ class Documents(object):
     class DocumentDoesNotExist(Exception):
         pass
 
-    def __init__(self, docs):
+    DocumentIdOrName = Union[int, str]
+
+    def __init__(self, docs: List['Documents.Document']):
         """List of Documents, where index is the id"""
         assert all(i == d.id for i, d in enumerate(docs))
         self._docs = docs
 
-    def __iter__(self):
+    def __iter__(self) -> Iterable['Documents.Document']:
         return self._docs.__iter__()
 
-    def __getitem__(self, key):
+    def __getitem__(
+        self, key: 'Documents.DocumentIdOrName'
+    ) -> 'Documents.Document':
         if isinstance(key, int):
             # Get doc name by id (IndexError)
             try:
@@ -185,19 +194,19 @@ class Documents(object):
             # Get doc id by name (KeyError)
             for d in self._docs:
                 if d.name == key:
-                    return d.id
+                    return d
             else:
                 raise Documents.DocumentDoesNotExist(key)
         raise TypeError('Not supported for {}'.format(type(key)))
 
-    def __contains__(self, key):
+    def __contains__(self, key: 'Documents.DocumentIdOrName') -> bool:
         try:
             self.__getitem__(key)
         except Documents.DocumentDoesNotExist:
             return False
         return True
 
-    def __len__(self):
+    def __len__(self) -> int:
         return len(self._docs)
 
     def prefix(self, key: str) -> List['Documents.Document']:
@@ -207,7 +216,7 @@ class Documents(object):
                 results.append(d)
         return results
 
-    def store(self, path: str):
+    def store(self, path: str) -> None:
         """Save the document list as TSV formatted file"""
         with open(path, 'w') as f:
             for d in self._docs:
@@ -215,7 +224,7 @@ class Documents(object):
                 f.write('\n')
 
     @staticmethod
-    def load(path):
+    def load(path: str) -> 'Documents':
         """Load a TSV formatted list of documents"""
         documents = []
         with open(path, 'r') as f:
@@ -241,7 +250,7 @@ class BinaryFormat(object):
         end_time_bytes: int     # Number of bytes to encode end - start
         datum_bytes: int        # Number of bytes to encode other data
 
-    def __init__(self, config):
+    def __init__(self, config: 'BinaryFormat.Config'):
         self._endian = 'little'
 
         assert config.start_time_bytes > 0
@@ -260,32 +269,32 @@ class BinaryFormat(object):
         self._max_datum_value = 2 ** (config.datum_bytes * 8) - 1
 
     @property
-    def u32_bytes(self):
+    def u32_bytes(self) -> int:
         return 4
 
     @property
-    def time_interval_bytes(self):
+    def time_interval_bytes(self) -> int:
         return self._time_interval_bytes
 
     @property
-    def datum_bytes(self):
+    def datum_bytes(self) -> int:
         return self._datum_bytes
 
     @property
-    def max_time_interval(self):
+    def max_time_interval(self) -> int:
         """Largest number of milliseconds between start and end times"""
         return self._max_time_interval
 
     @property
-    def max_datum_value(self):
+    def max_datum_value(self) -> int:
         """Largest value that can be serialized"""
         return self._max_datum_value
 
-    def encode_u32(self, data):
+    def encode_u32(self, data: int) -> bytes:
         assert isinstance(data, int)
         return (data).to_bytes(4, self._endian)
 
-    def encode_time_interval(self, start, end):
+    def encode_time_interval(self, start: int, end: int) -> bytes:
         assert isinstance(start, int)
         assert isinstance(end, int)
         diff = end - start
@@ -295,10 +304,10 @@ class BinaryFormat(object):
         if diff > self.max_time_interval:
             raise ValueError('end - start > {}'.format(self.max_time_interval))
         return (
-            (start).to_bytes(self._start_time_bytes, self._endian) +
-            (diff).to_bytes(self._end_time_bytes, self._endian))
+            (start).to_bytes(self._start_time_bytes, self._endian)
+            + (diff).to_bytes(self._end_time_bytes, self._endian))
 
-    def encode_datum(self, i):
+    def encode_datum(self, i: int) -> bytes:
         assert isinstance(i, int)
         if i < 0:
             raise ValueError('Out of range: {} < 0'.format(i))
@@ -307,23 +316,23 @@ class BinaryFormat(object):
                              i, self._max_datum_value))
         return (i).to_bytes(self._datum_bytes, self._endian)
 
-    def _decode_u32(self, s):
+    def _decode_u32(self, s: bytes) -> int:
         assert len(s) == 4, '{} is the wrong length'.format(len(s))
         return int.from_bytes(s, self._endian)
 
-    def _decode_time_interval(self, s):
+    def _decode_time_interval(self, s: bytes) -> Tuple[int, int]:
         assert len(s) == self.time_interval_bytes
         start = int.from_bytes(s[:self._start_time_bytes], self._endian)
         diff = int.from_bytes(s[self._start_time_bytes:], self._endian)
         return start, start + diff
 
-    def _decode_datum(self, s):
+    def _decode_datum(self, s: bytes) -> int:
         assert len(s) == self._datum_bytes, \
             '{} is the wrong length'.format(len(s))
         return int.from_bytes(s, self._endian)
 
     @staticmethod
-    def default():
+    def default() -> 'BinaryFormat':
         return BinaryFormat(
             BinaryFormat.Config(
                 start_time_bytes=4,
@@ -348,8 +357,12 @@ class CaptionIndex(object):
         id: int                                 # Document id
         postings: List['CaptionIndex.Posting']  # List of locations
 
+    DocIdOrDocument = Union[int, Documents.Document]
+    WordIdOrWord = Union[int, Lexicon.Word]
+
     def __init__(self, path: str, lexicon: Lexicon, documents: Documents,
-                 binary_format=None, tokenizer=None, debug=False):
+                 binary_format: Optional[BinaryFormat] = None,
+                 tokenizer: Optional[Tokenizer] = None, debug: bool = False):
         assert isinstance(lexicon, Lexicon)
         assert isinstance(documents, Documents)
         self._lexicon = lexicon
@@ -372,44 +385,19 @@ class CaptionIndex(object):
             return f(self, *args, **kwargs)
         return wrapper
 
-    def __enter__(self):
-        return self
-
-    def __exit__(self, exception_type, exception_value, traceback):
-        self.close()
-
-    def close(self):
-        self._rs_index = None
-
-    def __get_document_id(self, doc):
-        if isinstance(doc, Documents.Document):
-            return doc.id
-        else:
-            return self._documents[doc].id
-
-    def __get_document_ids(self, docs):
-        return [] if docs is None else [
-            self.__get_document_id(d) for d in docs]
-
-    def __get_word_id(self, word):
-        if isinstance(word, Lexicon.Word):
-            return word.id
-        else:
-            return self._lexicon[word].id
-
-    def tokenizer(self):
+    def tokenizer(self) -> Tokenizer:
         if self._tokenizer is None:
             self._tokenizer = default_tokenizer()
         return self._tokenizer
 
     @__require_open_index
-    def document_length(self, doc) -> int:
+    def document_length(self, doc: 'CaptionIndex.DocIdOrDocument') -> int:
         """Get the length of a document in tokens"""
         doc_id = self.__get_document_id(doc)
         return self._rs_index.document_length(doc_id)[0]
 
     @__require_open_index
-    def document_duration(self, doc) -> float:
+    def document_duration(self, doc: 'CaptionIndex.DocIdOrDocument') -> float:
         """Get the duration of a document in seconds"""
         doc_id = self.__get_document_id(doc)
         return self._rs_index.document_length(doc_id)[1]
@@ -482,14 +470,18 @@ class CaptionIndex(object):
         return set(self._rs_index.ngram_contains(word_ids, doc_ids))
 
     @__require_open_index
-    def tokens(self, doc, index=0, count=2 ** 31) -> List[int]:
+    def tokens(
+        self, doc: 'CaptionIndex.DocIdOrDocument',
+        index: int = 0, count: int = 2 ** 31
+    ) -> List[int]:
         """Get token ids for a range of positions in a document"""
         doc_id = self.__get_document_id(doc)
         return self._rs_index.tokens(doc_id, index, count)
 
     @__require_open_index
     def intervals(
-        self, doc, start_time=0., end_time=float('inf')
+        self, doc: 'CaptionIndex.DocIdOrDocument', start_time: float = 0.,
+        end_time: float = float('inf')
     ) -> Iterable['CaptionIndex.Posting']:
         """Get time intervals in the document"""
         doc_id = self.__get_document_id(doc)
@@ -498,25 +490,55 @@ class CaptionIndex(object):
             for p in self._rs_index.intervals(doc_id, start_time, end_time)]
 
     @__require_open_index
-    def position(self, doc, time_offset):
+    def position(self, doc: 'CaptionIndex.DocIdOrDocument',
+                 time_offset: float) -> int:
         """Find next token position containing or near the time offset"""
         doc_id = self.__get_document_id(doc)
         return self._rs_index.position(doc_id, time_offset)
+
+    def close(self) -> None:
+        self._rs_index = None
+
+    # Internal helper methods
+
+    def __enter__(self) -> 'CaptionIndex':
+        return self
+
+    def __exit__(self, exception_type, exception_value, traceback) -> None:
+        self.close()
+
+    def __get_document_id(self, doc: 'CaptionIndex.DocIdOrDocument') -> int:
+        if isinstance(doc, Documents.Document):
+            return doc.id
+        else:
+            return self._documents[doc].id
+
+    def __get_document_ids(
+        self, docs: Optional[Iterable['CaptionIndex.DocIdOrDocument']]
+    ) -> List['CaptionIndex.DocIdOrDocument']:
+        return [] if docs is None else [
+            self.__get_document_id(d) for d in docs]
+
+    def __get_word_id(self, word: WordIdOrWord) -> int:
+        if isinstance(word, Lexicon.Word):
+            return word.id
+        else:
+            return self._lexicon[word].id
 
 
 class MetadataFormat(ABC):
 
     @staticmethod
-    def header(doc_id: int, n: int):
+    def header(doc_id: int, n: int) -> bytes:
         return doc_id.to_bytes(4, 'little') + n.to_bytes(4, 'little')
 
     @abstractmethod
-    def decode(self, s):
+    def decode(self, s: bytes) -> object:
         """Return decoded metadata"""
         pass
 
     @abstractproperty
-    def size(self):
+    def size(self) -> int:
         """Number of bytes of metadata"""
         pass
 
@@ -526,23 +548,16 @@ class MetadataIndex(object):
     Interface to binary encoded metadata files for efficient iteration
     """
 
+    DocIdOrDocument = Union[int, Documents.Document]
+
     def __init__(self, path: str, documents: Documents,
-                 metadata_format: MetadataFormat, debug=False):
+                 metadata_format: MetadataFormat, debug: bool = False):
         assert isinstance(metadata_format, MetadataFormat)
         assert metadata_format.size > 0, \
             'Invalid metadata size: {}'.format(metadata_format.size)
         self._documents = documents
         self._meta_fmt = metadata_format
         self._rs_meta = RsMetadataIndex(path, metadata_format.size, debug)
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, exception_type, exception_value, traceback):
-        self.close()
-
-    def close(self):
-        self._rs_meta = None
 
     def __require_open_index(f):
         def wrapper(self, *args, **kwargs):
@@ -551,14 +566,11 @@ class MetadataIndex(object):
             return f(self, *args, **kwargs)
         return wrapper
 
-    def __get_document_id(self, doc):
-        if isinstance(doc, Documents.Document):
-            return doc.id
-        else:
-            return self._documents[doc].id
-
     @__require_open_index
-    def metadata(self, doc, position=0, count=2 ** 31) -> List:
+    def metadata(
+        self, doc: 'MetadataIndex.DocIdOrDocument',
+        position: int = 0, count: int = 2 ** 31
+    ) -> List[object]:
         """
         Generator over metadata returned by the MetadataFormat's decode method.
         """
@@ -570,6 +582,21 @@ class MetadataIndex(object):
         return [
             self._meta_fmt.decode(b)
             for b in self._rs_meta.metadata(doc_id, position, count)]
+
+    def close(self) -> None:
+        self._rs_meta = None
+
+    def __enter__(self) -> 'MetadataIndex':
+        return self
+
+    def __exit__(self, exception_type, exception_value, traceback) -> None:
+        self.close()
+
+    def __get_document_id(self, doc: 'MetadataIndex.DocIdOrDocument') -> int:
+        if isinstance(doc, Documents.Document):
+            return doc.id
+        else:
+            return self._documents[doc].id
 
 
 class NgramFrequency(object):
@@ -588,7 +615,10 @@ class NgramFrequency(object):
     class NgramDoesNotExist(Exception):
         pass
 
-    def __init__(self, path, lexicon, tokenizer=None):
+    Ngram = Union[str, Tuple]
+
+    def __init__(self, path: str, lexicon: Lexicon,
+                 tokenizer: Optional[Tokenizer] = None):
         """Dictionary of ngram to frequency"""
         assert isinstance(path, str)
         assert isinstance(lexicon, Lexicon)
@@ -601,10 +631,10 @@ class NgramFrequency(object):
         with open(path, 'rb') as f:
             self._counts, self._totals = pickle.load(f)
 
-    def __iter__(self):
+    def __iter__(self) -> Iterable['NgramFrequency.Ngram']:
         return self._counts.__iter__()
 
-    def __getitem__(self, key):
+    def __getitem__(self, key: 'NgramFrequency.Ngram') -> float:
         if isinstance(key, str):
             key = tuple(self._tokenizer.tokens(key.strip()))
         denom = self._totals[len(key) - 1]
@@ -621,12 +651,12 @@ class NgramFrequency(object):
                 raise NgramFrequency.NgramDoesNotExist(repr(key))
         raise TypeError('Not supported for {}'.format(type(key)))
 
-    def __contains__(self, key):
+    def __contains__(self, key: 'NgramFrequency.Ngram') -> bool:
         try:
             self.__getitem__(key)
         except NgramFrequency.NgramDoesNotExist:
             return False
         return True
 
-    def __len__(self):
+    def __len__(self) -> int:
         return len(self._counts)
