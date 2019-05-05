@@ -68,7 +68,7 @@ def test_tokenize():
     text = 'I\'m a string! This is a tokenizer test.'
     tokens = list(captions.default_tokenizer().tokens(text))
     assert isinstance(tokens[0], str)
-    assert len(tokens) == 11
+    assert len(tokens) == 12
 
 
 def test_lemmatize():
@@ -195,30 +195,6 @@ def test_frequent_words():
     assert len(util.frequent_words(lexicon, 99)) > 0
 
 
-def test_topic_search():
-    idx_dir = os.path.join(TMP_DIR, TEST_INDEX_SUBDIR)
-    idx_path = os.path.join(idx_dir, 'index.bin')
-    documents, lexicon = _get_docs_and_lex(idx_dir)
-    with captions.CaptionIndex(idx_path, lexicon, documents) as index:
-        all_results = []
-        for d in util.topic_search(
-            ['UNITED STATES', 'AMERICA', 'US'], index
-        ):
-            assert len(d.postings) > 0
-            all_results.append((d.id, len(d.postings)))
-
-        subset_results = []
-        for d in util.topic_search(
-            ['UNITED STATES', 'AMERICA', 'US'], index,
-            documents=list(range(10))
-        ):
-            assert len(d.postings) > 0
-            subset_results.append((d.id, len(d.postings)))
-
-        assert all_results[:10] == subset_results, \
-            'Search on subset does not match'
-
-
 def test_script_scan():
     idx_dir = os.path.join(TMP_DIR, TEST_INDEX_SUBDIR)
     scan.main(idx_dir, os.cpu_count(), None)
@@ -238,7 +214,7 @@ def test_script_build_metadata():
     build_metadata.main(idx_dir, True)
 
     documents, lexicon = _get_docs_and_lex(idx_dir)
-    with captions.MetadataIndex(
+    with captions.metadata.MetadataIndex(
             meta_path, documents,
             build_metadata.NLPTagFormat()) as metadata:
         for d in documents:
@@ -255,7 +231,7 @@ def test_script_build_ngrams_and_lexicon():
                       limit=None)
 
     _, lexicon = _get_docs_and_lex(idx_dir)
-    ngram_frequency = captions.NgramFrequency(ngram_path, lexicon)
+    ngram_frequency = captions.ngram.NgramFrequency(ngram_path, lexicon)
 
     def test_phrase(tokens):
         assert ' '.join(tokens) in ngram_frequency

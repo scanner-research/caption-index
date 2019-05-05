@@ -162,31 +162,18 @@ class _Phrase(_Expr):
         kwargs = {}
         if context.documents is not None:
             kwargs['documents'] = context.documents
-        results = []
 
-        def helper(i, tokens):
-            if i == len(self.tokens):
-                try:
-                    results.append(context.index.ngram_search(*tokens, **kwargs))
-                except Lexicon.WordDoesNotExist:
-                    pass
-                return
-            t = self.tokens[i]
+        ngram_tokens = []
+        for t in self.tokens:
             if t.expand:
-                for t_ in context.lexicon.similar(t.text):
-                    tokens.append(context.lexicon[t_])
-                    helper(i + 1, tokens)
-                    tokens.pop()
+                ngram_tokens.append([
+                    context.lexicon[x] for x in context.lexicon.similar(t.text)
+                ])
             else:
-                w = context.lexicon[t.text]
-                tokens.append(w)
-                helper(i + 1, tokens)
-                tokens.pop()
-        helper(0, deque())
+                ngram_tokens.append([context.lexicon[t.text]])
 
-        for doc_id, grouped_postings in group_results_by_document(results):
-            yield CaptionIndex.Document(
-                id=doc_id, postings=PostingUtil.union(grouped_postings))
+        for d in context.index.ngram_search(*ngram_tokens, **kwargs):
+            yield d
 
 
 def _dist_time_posting(p1, p2):

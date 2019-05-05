@@ -13,6 +13,7 @@ use pyo3::types::PyBytes;
 use pyo3::python::Python;
 use std::collections::BTreeMap;
 use std::cmp;
+use std::cmp::Ordering;
 use std::mem;
 use std::fs::File;
 use std::io::Cursor;
@@ -21,6 +22,7 @@ use memmap::{MmapOptions, Mmap};
 
 type DocumentId = u32;
 type TokenId = u32;
+type TokenIdOneOf = Vec<TokenId>;
 type Seconds = f32;
 type Millis = u32;
 type Position = usize;
@@ -246,17 +248,35 @@ impl RsCaptionIndex {
         }
     }
 
-    fn unigram_search(&self, unigram: TokenId, mut doc_ids: Vec<DocumentId>) ->
-                      PyResult<Vec<(DocumentId, Vec<Posting>)>> {
+    fn unigram_search(
+        &self, unigram: TokenIdOneOf, mut doc_ids: Vec<DocumentId>
+    ) -> PyResult<Vec<(DocumentId, Vec<Posting>)>> {
         if self.debug {
             let len_str = doc_ids.len().to_string();
-            eprintln!("unigram search: [{}] in {} documents", unigram,
+            eprintln!("unigram search: [{:?}] in {} documents", unigram,
                       if doc_ids.len() > 0 {len_str.as_str()} else {"all"});
         }
         let lookup_and_read_postings = |d| {
-            match self._internal.lookup_postings(d, unigram) {
-                Some(p) => Some(self._internal.read_postings(d, p.0, p.1)),
-                None => None
+            let mut unique_unigrams = 0;
+            let mut postings: Vec<Posting> = unigram.iter().flat_map(
+                |token| match self._internal.lookup_postings(d, *token) {
+                    Some(p) => {
+                        unique_unigrams += 1;
+                        self._internal.read_postings(d, p.0, p.1)
+                    },
+                    None => Vec::new()
+                }
+            ).collect();
+            if postings.len() > 0 {
+                if unique_unigrams > 1 {
+                    postings.sort_by(|a, b| match a.0.partial_cmp(&b.0) {
+                        Some(ord) => if ord == Ordering::Equal {a.2.cmp(&b.2)} else {ord}
+                        None => a.2.cmp(&b.2)
+                    });
+                }
+                Some(postings)
+            } else {
+                None
             }
         };
         let docs_to_unigrams =
@@ -282,14 +302,22 @@ impl RsCaptionIndex {
         Ok(docs_to_unigrams)
     }
 
-    fn unigram_contains(&self, unigram: TokenId, doc_ids: Vec<DocumentId>) ->
-                        PyResult<Vec<DocumentId>> {
+    fn unigram_contains(
+        &self, unigram: TokenIdOneOf, doc_ids: Vec<DocumentId>
+    ) -> PyResult<Vec<DocumentId>> {
         if self.debug {
             let len_str = doc_ids.len().to_string();
-            eprintln!("unigram contains: [{}] in {} documents", unigram,
+            eprintln!("unigram contains: [{:?}] in {} documents", unigram,
                       if doc_ids.len() > 0 {len_str.as_str()} else {"all"});
         }
-        let has_unigram = |d| self._internal.lookup_postings(d, unigram).is_some();
+        let has_unigram = |d| {
+            for i in 0..unigram.len() {
+                if self._internal.lookup_postings(d, unigram[i]).is_some() {
+                    return true;
+                }
+            }
+            false
+        };
         let docs_w_token =
             if doc_ids.len() > 0 {
                 doc_ids.par_iter().filter_map(
@@ -306,12 +334,11 @@ impl RsCaptionIndex {
         Ok(docs_w_token)
     }
 
-    fn ngram_search(&self, ngram: Vec<TokenId>, mut doc_ids: Vec<DocumentId>) ->
-                    PyResult<Vec<(DocumentId, Vec<Posting>)>> {
-        if ngram.len() == 0 {
-            Err(exceptions::ValueError::py_err("Ngram cannot be empty"))
-        } else if ngram.len() == 1 {
-            self.unigram_search(ngram[0], doc_ids)
+    fn ngram_search(
+        &self, ngram: Vec<TokenIdOneOf>, mut doc_ids: Vec<DocumentId>, anchor_idx: usize
+    ) -> PyResult<Vec<(DocumentId, Vec<Posting>)>> {
+        if ngram.len() <= 1 {
+            Err(exceptions::ValueError::py_err("Ngram must have at least 2 tokens"))
         } else {
             if self.debug {
                 let len_str = doc_ids.len().to_string();
@@ -324,74 +351,67 @@ impl RsCaptionIndex {
             let load_ngrams = |d: &Document| -> Option<Vec<Posting>> {
                 let base_index_ofs: usize = d.base_offset + d.inv_index_offset;
 
-                let mut posting_offsets = Vec::with_capacity(ngram.len());
-                for i in 0..ngram.len() {
-                    match self._internal.lookup_postings(d, ngram[i]) {
-                        None => return None, // One of the tokens is not found
-                        Some(p) => posting_offsets.push(p)
-                    }
+                let anchor_idx_posting_offsets: Vec<(usize, u32)> = ngram[anchor_idx].iter().filter_map(
+                    |token| self._internal.lookup_postings(d, *token)
+                ).collect();
+                if anchor_idx_posting_offsets.len() == 0 {
+                    return None;    // None of the optons matched
                 }
 
-                let mut result: Vec<Posting> = vec![];
+                let mut postings: Vec<Posting> = vec![];
+                let mut anchors_used = 0;
+                for i in 0..anchor_idx_posting_offsets.len() {
+                    let mut anchor_used = false;
+                    let anchor_token_posting_idx = anchor_idx_posting_offsets[i].0;
+                    if anchor_token_posting_idx < anchor_idx ||
+                       anchor_token_posting_idx - anchor_idx + ngram.len() >= d.length {
+                        continue;
+                    }
+                    let anchor_token_posting_count = anchor_idx_posting_offsets[i].1 as usize;
 
-                // Index of postings read for each subsequent token
-                let mut token_j_read_idx = vec![0usize; ngram.len() - 1];
+                    // Look for ngram around anchor index
+                    'curr_ngram_loop: for j in 0..anchor_token_posting_count {
+                        let ngram_anchor_pos = self._internal.read_datum(
+                            base_index_ofs +
+                            (anchor_token_posting_idx + j) * posting_size +
+                            time_int_size
+                        ) as usize;
 
-                let token_0_posting_idx = posting_offsets[0].0;
-                let token_0_posting_count = posting_offsets[0].1 as usize;
-
-                // Loop over first token's postings
-                'token_0_loop: for i in 0..token_0_posting_count {
-                    let ngram_pos_0 = self._internal.read_datum(
-                        base_index_ofs +
-                        (token_0_posting_idx + i) * posting_size +
-                        time_int_size) as usize;
-
-                    // Loop over subsequent tokens
-                    'token_j_loop: for j in 1..ngram.len() {
-                        let target_pos = ngram_pos_0 + j;
-                        let token_j_posting_idx = posting_offsets[j].0;
-                        let token_j_posting_count = posting_offsets[j].1 as usize;
-
-                        // Find token j at the target position
-                        loop {
-                            let ngram_pos_j =  self._internal.read_datum(
-                                base_index_ofs +
-                                (token_j_posting_idx + token_j_read_idx[j - 1]) * posting_size +
-                                time_int_size) as usize;
-                            if ngram_pos_j == target_pos {
-                                break;
-                            } else if ngram_pos_j < target_pos {
-                                // Advance reader state for token j
-                                token_j_read_idx[j - 1] += 1;
-
-                                // All postings exhausted for token j
-                                if token_j_read_idx[j - 1] == token_j_posting_count {
-                                    break 'token_0_loop;
+                        // Check indices around anchor index
+                        let ngram_base_pos = ngram_anchor_pos - anchor_idx;
+                        for k in 0..ngram.len() {
+                            if k != anchor_idx {
+                                let token_k = self._internal.read_datum(
+                                    (ngram_base_pos + k) * self._internal.datum_size
+                                    + d.base_offset + d.tokens_offset);
+                                if !ngram[k].contains(&token_k) {
+                                    break 'curr_ngram_loop;
                                 }
-                            } else {
-                                break 'token_j_loop;
                             }
                         }
-                        // End of loop: reached only when token j is found
 
-                        // Add to result if j is the last token
-                        if j == ngram.len() - 1 {
-                            let ngram_time_int_0 = self._internal.read_time_int(
-                                base_index_ofs +
-                                (token_0_posting_idx + i) * posting_size);
-                            let ngram_time_int_j = self._internal.read_time_int(
-                                base_index_ofs +
-                                (token_j_posting_idx + token_j_read_idx[j - 1]) * posting_size);
-                            result.push((
-                                ms_to_s(ngram_time_int_0.0), ms_to_s(ngram_time_int_j.1),
-                                ngram_pos_0, ngram.len()
-                            ))
-                        }
+                        // All other indices matched
+                        let ngram_time_int = self._internal.read_time_int(
+                            base_index_ofs +
+                            (anchor_token_posting_idx + i) * posting_size);
+                        postings.push((
+                            ms_to_s(ngram_time_int.0), ms_to_s(ngram_time_int.1),
+                            ngram_base_pos, ngram.len()
+                        ));
+                        anchor_used |= true;
+                    }
+                    if anchor_used {
+                        anchors_used += 1;
                     }
                 }
-                if result.len() > 0 {
-                    Some(result)
+                if postings.len() > 0 {
+                    if anchors_used > 1 {
+                        postings.sort_by(|a, b| match a.0.partial_cmp(&b.0) {
+                            Some(ord) => if ord == Ordering::Equal {a.2.cmp(&b.2)} else {ord}
+                            None => a.2.cmp(&b.2)
+                        });
+                    }
+                    Some(postings)
                 } else {
                     None
                 }
@@ -420,12 +440,11 @@ impl RsCaptionIndex {
         }
     }
 
-    fn ngram_contains(&self, ngram: Vec<TokenId>, doc_ids: Vec<DocumentId>) ->
-                      PyResult<Vec<DocumentId>> {
-        if ngram.len() == 0 {
-            Err(exceptions::ValueError::py_err("Ngram cannot be empty"))
-        } else if ngram.len() == 1 {
-            self.unigram_contains(ngram[0], doc_ids)
+    fn ngram_contains(
+        &self, ngram: Vec<TokenIdOneOf>, doc_ids: Vec<DocumentId>, anchor_idx: usize
+    ) -> PyResult<Vec<DocumentId>> {
+        if ngram.len() <= 1 {
+            Err(exceptions::ValueError::py_err("Ngram must have at least 2 tokens"))
         } else {
             if self.debug {
                 let len_str = doc_ids.len().to_string();
@@ -438,59 +457,43 @@ impl RsCaptionIndex {
             let has_ngram = |d: &Document| -> bool {
                 let base_index_ofs: usize = d.base_offset + d.inv_index_offset;
 
-                let mut posting_offsets = Vec::with_capacity(ngram.len());
-                for i in 0..ngram.len() {
-                    // return false if one of the tokens is not found
-                    match self._internal.lookup_postings(d, ngram[i]) {
-                        None => return false,
-                        Some(p) => posting_offsets.push(p)
-                    }
+                let anchor_idx_posting_offsets: Vec<(usize, u32)> =
+                    ngram[anchor_idx].iter().filter_map(
+                        |token| self._internal.lookup_postings(d, *token)
+                    ).collect();
+                if anchor_idx_posting_offsets.len() == 0 {
+                    return false;    // None of the optons matched
                 }
 
-                // Index of postings read for each subsequent token
-                let mut token_j_read_idx = vec![0usize; ngram.len() - 1];
+                for i in 0..anchor_idx_posting_offsets.len() {
+                    let anchor_token_posting_idx = anchor_idx_posting_offsets[i].0;
+                    if anchor_token_posting_idx < anchor_idx ||
+                       anchor_token_posting_idx - anchor_idx + ngram.len() >= d.length {
+                        continue;
+                    }
+                    let anchor_token_posting_count = anchor_idx_posting_offsets[i].1 as usize;
 
-                let token_0_posting_idx = posting_offsets[0].0;
-                let token_0_posting_count = posting_offsets[0].1 as usize;
+                    // Look for ngram around anchor index
+                    'curr_ngram_loop: for j in 0..anchor_token_posting_count {
+                        let ngram_anchor_pos = self._internal.read_datum(
+                            base_index_ofs +
+                            (anchor_token_posting_idx + j) * posting_size +
+                            time_int_size
+                        ) as usize;
 
-                // Loop over first token's postings
-                'token_0_loop: for i in 0..token_0_posting_count {
-                    let ngram_pos_0 = self._internal.read_datum(
-                        base_index_ofs +
-                        (token_0_posting_idx + i) * posting_size +
-                        time_int_size) as usize;
-
-                    // Loop over subsequent tokens
-                    'token_j_loop: for j in 1..ngram.len() {
-                        let target_pos = ngram_pos_0 + j;
-                        let token_j_posting_idx = posting_offsets[j].0;
-                        let token_j_posting_count = posting_offsets[j].1 as usize;
-
-                        // Find token j at the target position
-                        loop {
-                            let ngram_pos_j =  self._internal.read_datum(
-                                base_index_ofs +
-                                (token_j_posting_idx + token_j_read_idx[j - 1]) * posting_size +
-                                time_int_size) as usize;
-                            if ngram_pos_j == target_pos {
-                                break;
-                            } else if ngram_pos_j < target_pos {
-                                // Advance reader state for token j
-                                token_j_read_idx[j - 1] += 1;
-
-                                // All postings exhausted for token j
-                                if token_j_read_idx[j - 1] == token_j_posting_count {
-                                    break 'token_0_loop;
+                        // Check indices around anchor index
+                        let ngram_base_pos = ngram_anchor_pos - anchor_idx;
+                        for k in 0..ngram.len() {
+                            if k != anchor_idx {
+                                let token_k = self._internal.read_datum(
+                                    (ngram_base_pos + k) * self._internal.datum_size
+                                    + d.base_offset + d.tokens_offset);
+                                if !ngram[k].contains(&token_k) {
+                                    break 'curr_ngram_loop;
                                 }
-                            } else {
-                                break 'token_j_loop;
                             }
                         }
-
-                        // Reached only when token j is found
-                        if j == ngram.len() - 1 {
-                            return true;
-                        }
+                        return true;
                     }
                 }
                 false

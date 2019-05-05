@@ -7,11 +7,11 @@ import pickle
 from abc import ABC, abstractmethod, abstractproperty
 from collections import deque
 from typing import (
-    Callable, Dict, Iterable, List, Set, Tuple, NamedTuple, Union, Optional)
+    Dict, Iterable, List, Set, Tuple, NamedTuple, Union, Optional, Generator)
 
 from .lemmatize import default_lemmatizer
 from .tokenize import default_tokenizer, Tokenizer
-from .rs_captions import RsCaptionIndex, RsMetadataIndex    # type: ignore
+from .rs_captions import RsCaptionIndex                 # type: ignore
 
 
 class Lexicon(object):
@@ -234,6 +234,239 @@ class Documents(object):
         return Documents(documents)
 
 
+class CaptionIndex(object):
+    """
+    Interface to a binary encoded index file.
+    """
+
+    # A "posting" is an occurance of a token or n-gram
+    class Posting(NamedTuple):
+        start: float        # Start time in seconds
+        end: float          # End time in seconds
+        idx: int            # Start position in document
+        len: int            # Number of tokens
+
+    # Document object with postings
+    class Document(NamedTuple):
+        id: int                                 # Document id
+        postings: List['CaptionIndex.Posting']  # List of locations
+
+    DocIdOrDocument = Union[int, Documents.Document]
+    WordIdOrWord = Union[int, Lexicon.Word]
+
+    def __init__(self, path: str, lexicon: Lexicon, documents: Documents,
+                 binary_format: Optional['BinaryFormat'] = None,
+                 tokenizer: Optional[Tokenizer] = None, debug: bool = False):
+        assert isinstance(lexicon, Lexicon)
+        assert isinstance(documents, Documents)
+        self._lexicon = lexicon
+        self._documents = documents
+        self._tokenizer = tokenizer
+
+        if binary_format is None:
+            binary_format = BinaryFormat.default()
+
+        self._rs_index = RsCaptionIndex(
+            path, datum_size=binary_format.datum_bytes,
+            start_time_size=binary_format._start_time_bytes,
+            end_time_size=binary_format._end_time_bytes,
+            debug=debug)
+
+    def __require_open_index(f):
+        def wrapper(self, *args, **kwargs):
+            if self._rs_index is None:
+                raise ValueError('I/O on closed CaptionIndex')
+            return f(self, *args, **kwargs)
+        return wrapper
+
+    def tokenizer(self) -> Tokenizer:
+        if self._tokenizer is None:
+            self._tokenizer = default_tokenizer()
+        return self._tokenizer
+
+    @__require_open_index
+    def document_length(self, doc: 'CaptionIndex.DocIdOrDocument') -> int:
+        """Get the length of a document in tokens"""
+        doc_id = self.__get_document_id(doc)
+        return self._rs_index.document_length(doc_id)[0]
+
+    @__require_open_index
+    def document_duration(self, doc: 'CaptionIndex.DocIdOrDocument') -> float:
+        """Get the duration of a document in seconds"""
+        doc_id = self.__get_document_id(doc)
+        return self._rs_index.document_length(doc_id)[1]
+
+    def search(
+        self, text: Union[str, List[WordIdOrWord]],
+        documents: Optional[Iterable['CaptionIndex.DocIdOrDocument']] = None
+    ) -> Iterable['CaptionIndex.Document']:
+        """
+        Search for instances of text
+
+        Usage:
+            text: string, list of words, or list of word ids
+            documents: list of documents or ids to search in
+                       ([] or None means all documents)
+        """
+        if isinstance(text, str):
+            tokens = self.__tokenize_text(text)
+        else:
+            tokens = text
+        return self.ngram_search(*tokens, documents=documents)
+
+    @__require_open_index
+    def ngram_search(
+        self, first_word: Union[
+            'CaptionIndex.WordIdOrWord',
+            List['CaptionIndex.WordIdOrWord']
+        ],
+        *other_words,
+        documents: Optional[Iterable['CaptionIndex.DocIdOrDocument']] = None
+    ) -> Iterable['CaptionIndex.Document']:
+        """Search for ngram instances"""
+        doc_ids = self.__get_document_ids(documents)
+        if len(other_words) == 0:
+            result = self._rs_index.unigram_search(
+                [w.id for w in self.__get_word_opts(first_word)], doc_ids)
+        else:
+            ngram_word_ids, anchor_idx = self.__get_ngram_ids_and_anchor_idx(
+                [first_word, *other_words])
+            result = self._rs_index.ngram_search(
+                ngram_word_ids, doc_ids, anchor_idx)
+        return self.__unpack_rs_search(result)
+
+    def contains(
+        self, text: Union[str, List['CaptionIndex.WordIdOrWord']],
+        documents: Optional[Iterable['CaptionIndex.DocIdOrDocument']] = None
+    ) -> Set[int]:
+        """
+        Find documents (ids) containing the text
+
+        Usage:
+            text: string, list of words, or list of word ids
+            documents: list of documents or ids to search in
+                       ([] or None means all documents)
+        """
+        if isinstance(text, str):
+            tokens = self.__tokenize_text(text)
+        else:
+            tokens = text
+        return self.ngram_contains(*tokens, documents=documents)
+
+    @__require_open_index
+    def ngram_contains(
+        self, first_word: Union[
+            'CaptionIndex.WordIdOrWord',
+            List['CaptionIndex.WordIdOrWord']
+        ],
+        *other_words,
+        documents: Optional[Iterable['CaptionIndex.DocIdOrDocument']] = None
+    ) -> Set[int]:
+        """Find documents (ids) containing the ngram"""
+        doc_ids = self.__get_document_ids(documents)
+        if len(other_words) == 0:
+            result = self._rs_index.unigram_contains(
+                [w.id for w in self.__get_word_opts(first_word)], doc_ids)
+        else:
+            ngram_word_ids, anchor_idx = self.__get_ngram_ids_and_anchor_idx(
+                [first_word, *other_words])
+            result = self._rs_index.ngram_contains(
+                ngram_word_ids, doc_ids, anchor_idx)
+        return set(result)
+
+    @__require_open_index
+    def tokens(
+        self, doc: 'CaptionIndex.DocIdOrDocument',
+        index: int = 0, count: int = 2 ** 31
+    ) -> List[int]:
+        """Get token ids for a range of positions in a document"""
+        doc_id = self.__get_document_id(doc)
+        return self._rs_index.tokens(doc_id, index, count)
+
+    @__require_open_index
+    def intervals(
+        self, doc: 'CaptionIndex.DocIdOrDocument',
+        start_time: float = 0.,
+        end_time: float = float('inf')
+    ) -> Iterable['CaptionIndex.Posting']:
+        """Get time intervals in the document"""
+        doc_id = self.__get_document_id(doc)
+        return [
+            CaptionIndex.Posting(*p)
+            for p in self._rs_index.intervals(doc_id, start_time, end_time)]
+
+    @__require_open_index
+    def position(
+        self, doc: 'CaptionIndex.DocIdOrDocument',
+        time_offset: float
+    ) -> int:
+        """Find next token position containing or near the time offset"""
+        doc_id = self.__get_document_id(doc)
+        return self._rs_index.position(doc_id, time_offset)
+
+    def close(self) -> None:
+        self._rs_index = None
+
+    # Internal helper methods
+
+    def __enter__(self) -> 'CaptionIndex':
+        return self
+
+    def __exit__(self, exception_type, exception_value, traceback) -> None:
+        self.close()
+
+    def __get_document_id(self, doc: 'CaptionIndex.DocIdOrDocument') -> int:
+        if isinstance(doc, Documents.Document):
+            return doc.id
+        else:
+            return self._documents[doc].id
+
+    def __get_document_ids(
+        self, docs: Optional[Iterable['CaptionIndex.DocIdOrDocument']]
+    ) -> List['CaptionIndex.DocIdOrDocument']:
+        return [] if docs is None else [
+            self.__get_document_id(d) for d in docs]
+
+    def __get_word_opts(
+        self, word: Union[
+            'CaptionIndex.WordIdOrWord',
+            List['CaptionIndex.WordIdOrWord']
+        ]
+    ) -> List[Lexicon.Word]:
+        if isinstance(word, Lexicon.Word):
+            return [word]
+        elif isinstance(word, (str, int)):
+            return [self._lexicon[word]]
+        else:
+            return [w if isinstance(w, Lexicon.Word) else self._lexicon[w]
+                    for w in word]
+
+    def __get_ngram_ids_and_anchor_idx(self, words):
+        ngram_word_ids = []
+        min_cost = 0xFFFFFFFF
+        min_cost_idx = None
+        for i, word in enumerate(words):
+            word_opts = self.__get_word_opts(word)
+            ngram_word_ids.append([w.id for w in word_opts])
+            word_cost = sum(w.count for w in word_opts)
+            if word_cost < min_cost:
+                min_cost = word_cost
+                min_cost_idx = i
+        return ngram_word_ids, min_cost_idx
+
+    def __tokenize_text(self, text: str) -> List[str]:
+        tokens = list(self.tokenizer().tokens(text.strip()))
+        if len(tokens) == 0:
+            raise ValueError('No tokens in input')
+        return tokens
+
+    def __unpack_rs_search(self, result) -> Generator:
+        for doc_id, postings in result:
+            yield CaptionIndex.Document(
+                id=doc_id, postings=[
+                    CaptionIndex.Posting(*p) for p in postings])
+
+
 class BinaryFormat(object):
     """
     Binary data formatter for writing and reading the indexes
@@ -338,325 +571,3 @@ class BinaryFormat(object):
                 start_time_bytes=4,
                 end_time_bytes=2,
                 datum_bytes=3))
-
-
-class CaptionIndex(object):
-    """
-    Interface to a binary encoded index file.
-    """
-
-    # A "posting" is an occurance of a token or n-gram
-    class Posting(NamedTuple):
-        start: float        # Start time in seconds
-        end: float          # End time in seconds
-        idx: int            # Start position in document
-        len: int            # Number of tokens
-
-    # Document object with postings
-    class Document(NamedTuple):
-        id: int                                 # Document id
-        postings: List['CaptionIndex.Posting']  # List of locations
-
-    DocIdOrDocument = Union[int, Documents.Document]
-    WordIdOrWord = Union[int, Lexicon.Word]
-
-    def __init__(self, path: str, lexicon: Lexicon, documents: Documents,
-                 binary_format: Optional[BinaryFormat] = None,
-                 tokenizer: Optional[Tokenizer] = None, debug: bool = False):
-        assert isinstance(lexicon, Lexicon)
-        assert isinstance(documents, Documents)
-        self._lexicon = lexicon
-        self._documents = documents
-        self._tokenizer = tokenizer
-
-        if binary_format is None:
-            binary_format = BinaryFormat.default()
-
-        self._rs_index = RsCaptionIndex(
-            path, datum_size=binary_format.datum_bytes,
-            start_time_size=binary_format._start_time_bytes,
-            end_time_size=binary_format._end_time_bytes,
-            debug=debug)
-
-    def __require_open_index(f):
-        def wrapper(self, *args, **kwargs):
-            if self._rs_index is None:
-                raise ValueError('I/O on closed CaptionIndex')
-            return f(self, *args, **kwargs)
-        return wrapper
-
-    def tokenizer(self) -> Tokenizer:
-        if self._tokenizer is None:
-            self._tokenizer = default_tokenizer()
-        return self._tokenizer
-
-    @__require_open_index
-    def document_length(self, doc: 'CaptionIndex.DocIdOrDocument') -> int:
-        """Get the length of a document in tokens"""
-        doc_id = self.__get_document_id(doc)
-        return self._rs_index.document_length(doc_id)[0]
-
-    @__require_open_index
-    def document_duration(self, doc: 'CaptionIndex.DocIdOrDocument') -> float:
-        """Get the duration of a document in seconds"""
-        doc_id = self.__get_document_id(doc)
-        return self._rs_index.document_length(doc_id)[1]
-
-    def __tokenize_text(self, text):
-        if isinstance(text, str):
-            tokens = list(self.tokenizer().tokens(text.strip()))
-            if len(tokens) == 0:
-                raise ValueError('No words in input')
-            for t in tokens:
-                if t not in self._lexicon:
-                    raise ValueError('{} is not in the lexicon'.format(t))
-        elif isinstance(text, list):
-            tokens = text
-            if len(tokens) == 0:
-                raise ValueError('No words in input')
-        else:
-            raise TypeError('Unsupported type: {}'.format(type(text)))
-        return tokens
-
-    def search(
-        self, text, documents=None
-    ) -> Iterable['CaptionIndex.Document']:
-        """
-        Search for instances of text
-
-        Usage:
-            text: string, list of words, or list of word ids
-            documents: list of documents or ids to search in
-                       ([] or None means all documents)
-        """
-        tokens = self.__tokenize_text(text)
-        return self.ngram_search(*tokens, documents=documents)
-
-    def __unpack_rs_search(self, result):
-        for doc_id, postings in result:
-            yield CaptionIndex.Document(
-                id=doc_id, postings=[
-                    CaptionIndex.Posting(*p) for p in postings])
-
-    @__require_open_index
-    def ngram_search(
-        self, first_word, *other_words, documents=None
-    ) -> Iterable['CaptionIndex.Document']:
-        """Search for ngram instances"""
-        doc_ids = self.__get_document_ids(documents)
-        word_ids = [self.__get_word_id(w) for w in [first_word, *other_words]]
-        return self.__unpack_rs_search(
-            self._rs_index.ngram_search(word_ids, doc_ids))
-
-    def contains(self, text, documents=None) -> Set[int]:
-        """
-        Find documents (ids) containing the text
-
-        Usage:
-            text: string, list of words, or list of word ids
-            documents: list of documents or ids to search in
-                       ([] or None means all documents)
-        """
-        tokens = self.__tokenize_text(text)
-        return self.ngram_contains(*tokens, documents=documents)
-
-    @__require_open_index
-    def ngram_contains(
-        self, first_word, *other_words, documents=None
-    ) -> Set[int]:
-        """Find documents (ids) containing the ngram"""
-        doc_ids = self.__get_document_ids(documents)
-        word_ids = [self.__get_word_id(w) for w in [first_word, *other_words]]
-        return set(self._rs_index.ngram_contains(word_ids, doc_ids))
-
-    @__require_open_index
-    def tokens(
-        self, doc: 'CaptionIndex.DocIdOrDocument',
-        index: int = 0, count: int = 2 ** 31
-    ) -> List[int]:
-        """Get token ids for a range of positions in a document"""
-        doc_id = self.__get_document_id(doc)
-        return self._rs_index.tokens(doc_id, index, count)
-
-    @__require_open_index
-    def intervals(
-        self, doc: 'CaptionIndex.DocIdOrDocument', start_time: float = 0.,
-        end_time: float = float('inf')
-    ) -> Iterable['CaptionIndex.Posting']:
-        """Get time intervals in the document"""
-        doc_id = self.__get_document_id(doc)
-        return [
-            CaptionIndex.Posting(*p)
-            for p in self._rs_index.intervals(doc_id, start_time, end_time)]
-
-    @__require_open_index
-    def position(self, doc: 'CaptionIndex.DocIdOrDocument',
-                 time_offset: float) -> int:
-        """Find next token position containing or near the time offset"""
-        doc_id = self.__get_document_id(doc)
-        return self._rs_index.position(doc_id, time_offset)
-
-    def close(self) -> None:
-        self._rs_index = None
-
-    # Internal helper methods
-
-    def __enter__(self) -> 'CaptionIndex':
-        return self
-
-    def __exit__(self, exception_type, exception_value, traceback) -> None:
-        self.close()
-
-    def __get_document_id(self, doc: 'CaptionIndex.DocIdOrDocument') -> int:
-        if isinstance(doc, Documents.Document):
-            return doc.id
-        else:
-            return self._documents[doc].id
-
-    def __get_document_ids(
-        self, docs: Optional[Iterable['CaptionIndex.DocIdOrDocument']]
-    ) -> List['CaptionIndex.DocIdOrDocument']:
-        return [] if docs is None else [
-            self.__get_document_id(d) for d in docs]
-
-    def __get_word_id(self, word: WordIdOrWord) -> int:
-        if isinstance(word, Lexicon.Word):
-            return word.id
-        else:
-            return self._lexicon[word].id
-
-
-class MetadataFormat(ABC):
-
-    @staticmethod
-    def header(doc_id: int, n: int) -> bytes:
-        return doc_id.to_bytes(4, 'little') + n.to_bytes(4, 'little')
-
-    @abstractmethod
-    def decode(self, s: bytes) -> object:
-        """Return decoded metadata"""
-        pass
-
-    @abstractproperty
-    def size(self) -> int:
-        """Number of bytes of metadata"""
-        pass
-
-
-class MetadataIndex(object):
-    """
-    Interface to binary encoded metadata files for efficient iteration
-    """
-
-    DocIdOrDocument = Union[int, Documents.Document]
-
-    def __init__(self, path: str, documents: Documents,
-                 metadata_format: MetadataFormat, debug: bool = False):
-        assert isinstance(metadata_format, MetadataFormat)
-        assert metadata_format.size > 0, \
-            'Invalid metadata size: {}'.format(metadata_format.size)
-        self._documents = documents
-        self._meta_fmt = metadata_format
-        self._rs_meta = RsMetadataIndex(path, metadata_format.size, debug)
-
-    def __require_open_index(f):
-        def wrapper(self, *args, **kwargs):
-            if self._rs_meta is None:
-                raise ValueError('I/O on closed MetadataIndex')
-            return f(self, *args, **kwargs)
-        return wrapper
-
-    @__require_open_index
-    def metadata(
-        self, doc: 'MetadataIndex.DocIdOrDocument',
-        position: int = 0, count: int = 2 ** 31
-    ) -> List[object]:
-        """
-        Generator over metadata returned by the MetadataFormat's decode method.
-        """
-        doc_id = self.__get_document_id(doc)
-        if position < 0:
-            raise ValueError('Position cannot be negative')
-        if count < 0:
-            raise ValueError('Count cannot be negative')
-        return [
-            self._meta_fmt.decode(b)
-            for b in self._rs_meta.metadata(doc_id, position, count)]
-
-    def close(self) -> None:
-        self._rs_meta = None
-
-    def __enter__(self) -> 'MetadataIndex':
-        return self
-
-    def __exit__(self, exception_type, exception_value, traceback) -> None:
-        self.close()
-
-    def __get_document_id(self, doc: 'MetadataIndex.DocIdOrDocument') -> int:
-        if isinstance(doc, Documents.Document):
-            return doc.id
-        else:
-            return self._documents[doc].id
-
-
-class NgramFrequency(object):
-    """
-    A map from ngrams to their frequencies
-
-    Get the frequency of an ngram of all other ngrams of that length
-    with the following:
-        freq = ngram_frequency[('hello', 'there')]
-
-    Test if a ngram exists:
-        if ('hello', 'world') in ngram_frequency:
-            ...
-    """
-
-    class NgramDoesNotExist(Exception):
-        pass
-
-    Ngram = Union[str, Tuple]
-
-    def __init__(self, path: str, lexicon: Lexicon,
-                 tokenizer: Optional[Tokenizer] = None):
-        """Dictionary of ngram to frequency"""
-        assert isinstance(path, str)
-        assert isinstance(lexicon, Lexicon)
-        self._lexicon = lexicon
-
-        if tokenizer is None:
-            tokenizer = default_tokenizer()
-        self._tokenizer = tokenizer
-
-        with open(path, 'rb') as f:
-            self._counts, self._totals = pickle.load(f)
-
-    def __iter__(self) -> Iterable['NgramFrequency.Ngram']:
-        return self._counts.__iter__()
-
-    def __getitem__(self, key: 'NgramFrequency.Ngram') -> float:
-        if isinstance(key, str):
-            key = tuple(self._tokenizer.tokens(key.strip()))
-        denom = self._totals[len(key) - 1]
-        if isinstance(key[0], int):
-            try:
-                return self._counts[key] / denom
-            except KeyError:
-                raise NgramFrequency.NgramDoesNotExist(repr(key))
-        elif isinstance(key[0], str):
-            key = tuple(self._lexicon[k].id for k in key)
-            try:
-                return self._counts[key] / denom
-            except KeyError:
-                raise NgramFrequency.NgramDoesNotExist(repr(key))
-        raise TypeError('Not supported for {}'.format(type(key)))
-
-    def __contains__(self, key: 'NgramFrequency.Ngram') -> bool:
-        try:
-            self.__getitem__(key)
-        except NgramFrequency.NgramDoesNotExist:
-            return False
-        return True
-
-    def __len__(self) -> int:
-        return len(self._counts)

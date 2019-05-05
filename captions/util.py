@@ -11,14 +11,14 @@ import os
 from collections import deque, Counter
 from typing import Generator, Iterable, List, Tuple, Union
 
-from .index import Lexicon, CaptionIndex, NgramFrequency
+from .index import Lexicon, CaptionIndex
 
 Number = Union[int, float]
 
 VERBOSE = False
 
 
-def window(tokens: Iterable, n: int, subwindows: bool = False):
+def window(tokens: Iterable, n: int, subwindows: bool = False) -> Generator:
     """Takes an iterable words and returns a windowed iterator"""
     buffer = deque()
     for t in tokens:
@@ -37,7 +37,9 @@ def window(tokens: Iterable, n: int, subwindows: bool = False):
             buffer.popleft()
 
 
-def frequent_words(lexicon: Lexicon, percentile: float = 99.7) -> List[Lexicon.Word]:
+def frequent_words(
+    lexicon: Lexicon, percentile: float = 99.7
+) -> List[Lexicon.Word]:
     """Return words at a frequency percentile"""
     threshold = np.percentile([w.count for w in lexicon], percentile)
     return [w for w in lexicon if w.count >= threshold]
@@ -159,29 +161,3 @@ def group_results_by_document(
             else:
                 break
         yield curr_doc_head.id, curr_doc_postings_lists
-
-
-def topic_search(
-    phrases: List, index: CaptionIndex, window_size: Number = 30,
-    documents=None
-) -> Iterable[CaptionIndex.Document]:
-    """
-    Search for time segments where any of the phrases occur with time windows
-    dilated by window size seconds.
-    """
-    assert isinstance(index, CaptionIndex)
-    assert isinstance(phrases, list)
-    results = []
-    for phrase in phrases:
-        try:
-            result = index.search(phrase, documents=documents)
-            results.append(result)
-        except (KeyError, IndexError, ValueError):
-            pass
-    for doc_id, posting_lists in group_results_by_document(results):
-        duration = index.document_duration(doc_id)
-        postings = PostingUtil.deoverlap(
-            PostingUtil.dilate(
-                PostingUtil.union(posting_lists),
-                window_size, duration))
-        yield CaptionIndex.Document(id=doc_id, postings=postings)

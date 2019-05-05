@@ -1,4 +1,5 @@
 import string
+import re
 from abc import ABC, abstractmethod
 from typing import List
 
@@ -10,7 +11,7 @@ class Tokenizer(ABC):
         pass
 
 
-def _sanitize(t):
+def _sanitize(t: str) -> str:
     return ''.join(filter(lambda x: x in string.printable, t)).strip()
 
 
@@ -26,6 +27,29 @@ class SpacyTokenizer(Tokenizer):
         return [t for t in tokens if t]
 
 
+class BasicTokenizer(Tokenizer):
+
+    def __init__(self):
+        self._re = re.compile(r'[.,!?:;(){}[\]`|"\']')
+
+    def tokens(self, text: str) -> List[str]:
+        result = []
+        for t in _sanitize(text).split():
+            if len(t) == 0:
+                continue
+            i = 0
+            for m in self._re.finditer(t):
+                token = t[i:m.start(0)]
+                if token:
+                    result.append(token)
+                result.append(m.group(0))
+                i = m.end(0)
+            remainder = t[i:]
+            if remainder:
+                result.append(remainder)
+        return result
+
+
 _DEFAULT_TOKENIZER = None
 
 
@@ -33,5 +57,5 @@ def default_tokenizer():
     """Get the default tokenizer"""
     global _DEFAULT_TOKENIZER
     if _DEFAULT_TOKENIZER is None:
-        _DEFAULT_TOKENIZER = SpacyTokenizer()
+        _DEFAULT_TOKENIZER = BasicTokenizer()
     return _DEFAULT_TOKENIZER

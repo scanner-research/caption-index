@@ -11,7 +11,8 @@ import traceback
 from spacy.tokens import Doc
 from tqdm import tqdm
 
-from captions import Lexicon, Documents, CaptionIndex, MetadataFormat
+from captions import Lexicon, Documents, CaptionIndex
+from captions.metadata import MetadataFormat
 
 
 NLP = spacy.load('en', disable=['ner', 'parser'])

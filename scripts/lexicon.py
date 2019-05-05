@@ -10,8 +10,8 @@ import spacy
 import time
 import traceback
 
-from captions import Lexicon, Documents, CaptionIndex, NgramFrequency, \
-                     default_tokenizer
+from captions import Lexicon, Documents, CaptionIndex, default_tokenizer
+from captions.ngram import NgramFrequency
 import captions.pmi as pmi
 
 
