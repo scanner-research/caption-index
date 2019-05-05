@@ -43,7 +43,7 @@ class Lexicon(object):
 
     WordIdOrString = Union[str, int]
 
-    def __init__(self, words):
+    def __init__(self, words, lazy_lemmas=True):
         """List of words, where w.id is the index in the list"""
         assert isinstance(words, list)
         self._words = words
@@ -51,8 +51,13 @@ class Lexicon(object):
         for i, w in enumerate(words):
             assert w.id == i
             self._inverse[w.token] = w
-        self._lemmas = None
-        self._lemmatizer = None
+        if not lazy_lemmas:
+            self.__init_lemmas()
+            assert self._lemmatizer is not None
+            assert self._lemmas is not None
+        else:
+            self._lemmas = None
+            self._lemmatizer = None
 
     def __iter__(self):
         # Iterate lexicon in id order
@@ -83,22 +88,10 @@ class Lexicon(object):
     def __len__(self) -> int:
         return len(self._words)
 
-    def __lemmas_init(self) -> None:
-        """Compute lemmas for every word"""
-        lemmatizer = default_lemmatizer()
-        lemmas = {}
-        for w in self._words:
-            for lem in lemmatizer.lemma(w.token.lower()):
-                if lem not in lemmas:
-                    lemmas[lem] = set()
-                lemmas[lem].add(w.id)
-        self._lemmatizer = lemmatizer
-        self._lemmas = lemmas
-
     def similar(self, key: WordIdOrString) -> Set[int]:
         """Return words that are similar (share the same lemma)"""
         if self._lemmatizer is None:
-            self.__lemmas_init()
+            self.__init_lemmas()
             assert self._lemmatizer is not None
             assert self._lemmas is not None
         if isinstance(key, str):
@@ -135,7 +128,7 @@ class Lexicon(object):
                 tsv_writer.writerow([w.id, w.count, w.token])
 
     @staticmethod
-    def load(path: str) -> 'Lexicon':
+    def load(path: str, lazy_lemmas=True) -> 'Lexicon':
         """Load a TSV formatted lexicon"""
         with open(path, 'r') as f:
             tsv_reader = csv.reader(f, delimiter='\t')
@@ -144,7 +137,20 @@ class Lexicon(object):
                 id_, count, token = row
                 words.append(Lexicon.Word(id=int(id_), count=int(count),
                                           token=token))
-        return Lexicon(words)
+        return Lexicon(words, lazy_lemmas=lazy_lemmas)
+
+    # Internal helper methods
+    def __init_lemmas(self) -> None:
+        """Compute lemmas for every word"""
+        lemmatizer = default_lemmatizer()
+        lemmas = {}
+        for w in self._words:
+            for lem in lemmatizer.lemma(w.token.lower()):
+                if lem not in lemmas:
+                    lemmas[lem] = set()
+                lemmas[lem].add(w.id)
+        self._lemmatizer = lemmatizer
+        self._lemmas = lemmas
 
 
 class Documents(object):
