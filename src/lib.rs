@@ -226,6 +226,37 @@ impl _RsCaptionIndex {
             Some(min_idx)
         }
     }
+
+    fn lookup_time_int_by_idx(
+        &self, d: &Document, idx: u32, hint_idx: usize
+    ) -> Option<(usize, (Millis, Millis))> {
+        let mut min_idx: usize = hint_idx;
+        let mut max_idx = d.time_int_count as usize;
+        let base_index_ofs = d.base_offset + d.time_index_offset;
+        let posting_size = self.posting_size();
+        let time_int_size = self.time_int_size();
+
+        while max_idx > min_idx {
+            let pivot = (min_idx + max_idx) / 2;
+            if pivot + 1 == d.time_int_count as usize {
+                return Some(
+                    (pivot, self.read_time_int(base_index_ofs + (pivot as usize) * posting_size)));
+            }
+            let pivot_idx = self.read_datum(
+                base_index_ofs + (pivot as usize) * posting_size + time_int_size);
+            let pivot_idx_next = self.read_datum(
+                base_index_ofs + ((pivot + 1) as usize) * posting_size + time_int_size);
+            if idx < pivot_idx {
+                max_idx = pivot;
+            } else if idx >= pivot_idx && idx < pivot_idx_next {
+                return Some(
+                    (pivot, self.read_time_int(base_index_ofs + (pivot as usize) * posting_size)));
+            } else {
+                min_idx = pivot;
+            }
+        }
+        None
+    }
 }
 
 #[pyclass]
@@ -347,6 +378,7 @@ impl RsCaptionIndex {
             }
             let time_int_size = self._internal.time_int_size();
             let posting_size = self._internal.posting_size();
+            let ngram_len = ngram.len();
 
             let load_ngrams = |d: &Document| -> Option<Vec<Posting>> {
                 let base_index_ofs: usize = d.base_offset + d.inv_index_offset;
@@ -364,10 +396,12 @@ impl RsCaptionIndex {
                     let mut anchor_used = false;
                     let anchor_token_posting_idx = anchor_idx_posting_offsets[i].0;
                     if anchor_token_posting_idx < anchor_idx ||
-                       anchor_token_posting_idx - anchor_idx + ngram.len() >= d.length {
+                       anchor_token_posting_idx - anchor_idx + ngram_len >= d.length {
                         continue;
                     }
                     let anchor_token_posting_count = anchor_idx_posting_offsets[i].1 as usize;
+
+                    let mut hint_time_int_idx: usize = 0;
 
                     // Look for ngram around anchor index
                     'curr_ngram_loop: for j in 0..anchor_token_posting_count {
@@ -379,7 +413,7 @@ impl RsCaptionIndex {
 
                         // Check indices around anchor index
                         let ngram_base_pos = ngram_anchor_pos - anchor_idx;
-                        for k in 0..ngram.len() {
+                        for k in 0..ngram_len {
                             if k != anchor_idx {
                                 let token_k = self._internal.read_datum(
                                     (ngram_base_pos + k) * self._internal.datum_size
@@ -391,12 +425,45 @@ impl RsCaptionIndex {
                         }
 
                         // All other indices matched
-                        let ngram_time_int = self._internal.read_time_int(
+                        let ngram_anchor_time_int = self._internal.read_time_int(
                             base_index_ofs +
                             (anchor_token_posting_idx + i) * posting_size);
+                        let start_ms = if anchor_idx != 0 {
+                            match self._internal.lookup_time_int_by_idx(
+                                d, ngram_base_pos as u32, hint_time_int_idx
+                            ) {
+                                Some((new_lower_hint_idx, ngram_start_time_int)) => {
+                                    // assert!(
+                                    //     ngram_anchor_time_int.0 >= ngram_start_time_int.0,
+                                    //     "inconsistent start time for ngram: {} < {}",
+                                    //     ngram_anchor_time_int.0, ngram_start_time_int.0);
+                                    hint_time_int_idx = cmp::max(new_lower_hint_idx, hint_time_int_idx);
+                                    cmp::min(ngram_start_time_int.0, ngram_anchor_time_int.0)
+                                },
+                                None => ngram_anchor_time_int.0
+                            }
+                        } else {
+                            ngram_anchor_time_int.0
+                        };
+                        let end_ms = if anchor_idx + 1 == ngram_len {
+                            match self._internal.lookup_time_int_by_idx(
+                                d, (ngram_base_pos + ngram_len) as u32, hint_time_int_idx
+                            ) {
+                                Some((_, ngram_end_time_int)) => {
+                                    // assert!(
+                                    //     ngram_anchor_time_int.1 <= ngram_end_time_int.1,
+                                    //     "inconsistent end time for ngram: {} > {}",
+                                    //     ngram_anchor_time_int.1, ngram_end_time_int.1);
+                                    cmp::max(ngram_end_time_int.1, ngram_anchor_time_int.1)
+                                },
+                                None => ngram_anchor_time_int.1
+                            }
+                        } else {
+                            ngram_anchor_time_int.1
+                        };
+
                         postings.push((
-                            ms_to_s(ngram_time_int.0), ms_to_s(ngram_time_int.1),
-                            ngram_base_pos, ngram.len()
+                            ms_to_s(start_ms), ms_to_s(end_ms), ngram_base_pos, ngram_len
                         ));
                         anchor_used |= true;
                     }

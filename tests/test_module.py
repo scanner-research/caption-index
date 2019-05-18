@@ -143,6 +143,9 @@ def test_inverted_index():
         test_search_and_contains(['UNITED', 'STATES', 'OF', 'AMERICA'],
                                  all_doc_ids)
 
+        test_search_and_contains(['THE', 'GREAT', 'WAR'])
+        test_search_and_contains(['THE', 'GREAT', 'WAR'], all_doc_ids)
+
 
 def test_token_data():
     idx_dir = os.path.join(TMP_DIR, TEST_INDEX_SUBDIR)
