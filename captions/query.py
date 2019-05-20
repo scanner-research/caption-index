@@ -74,8 +74,8 @@ Groups: ()
 
 import heapq
 from abc import ABC, abstractmethod, abstractproperty
-from collections import deque, namedtuple
-from typing import Dict, List, Iterable
+from collections import deque
+from typing import Dict, List, Iterable, NamedTuple, Optional
 from parsimonious.grammar import Grammar, NodeVisitor
 
 from .index import Lexicon, CaptionIndex
@@ -110,7 +110,7 @@ GRAMMAR = Grammar(r"""
     tokens = token more_tokens
     more_tokens = (sp token)*
 
-    token = ~r"[^\s()&|\^]+"
+    token = ~r"[^\s()&|\^\[\]]+"
 
     sp = ~r"\s+"
 """)
@@ -118,7 +118,11 @@ GRAMMAR = Grammar(r"""
 
 class _Expr(ABC):
 
-    Context = namedtuple('Context', ['lexicon', 'index', 'documents'])
+    class Context(NamedTuple):
+        lexicon: Lexicon
+        index: CaptionIndex
+        documents: Optional[Iterable[CaptionIndex.DocIdOrDocument]]
+        ignore_word_not_found: bool
 
     @abstractmethod
     def eval(self, context) -> Iterable[CaptionIndex.Document]:
@@ -143,7 +147,9 @@ class _JoinExpr(_Expr):
 
 class _Phrase(_Expr):
 
-    Token = namedtuple('Token', ['text', 'expand'])
+    class Token(NamedTuple):
+        text: str
+        expand: bool
 
     def __init__(self, tokens):
         assert all(isinstance(t, _Phrase.Token) for t in tokens)
@@ -166,11 +172,20 @@ class _Phrase(_Expr):
         ngram_tokens = []
         for t in self.tokens:
             if t.expand:
-                ngram_tokens.append([
-                    context.lexicon[x] for x in context.lexicon.similar(t.text)
-                ])
+                tokens = [context.lexicon[x] for x in
+                          context.lexicon.similar(t.text)]
+                if len(tokens) == 0:
+                    return
+                ngram_tokens.append(tokens)
             else:
-                ngram_tokens.append([context.lexicon[t.text]])
+                try:
+                    token = context.lexicon[t.text]
+                except Lexicon.WordDoesNotExist:
+                    if context.ignore_word_not_found:
+                        return
+                    else:
+                        raise
+                ngram_tokens.append([token])
 
         for d in context.index.ngram_search(*ngram_tokens, **kwargs):
             yield d
@@ -427,6 +442,8 @@ class Query(object):
         self._tree = _QueryParser(config).parse(raw_query)
 
     def execute(
-        self, lexicon: Lexicon, index: CaptionIndex, documents=None
+        self, lexicon: Lexicon, index: CaptionIndex, documents=None,
+        ignore_word_not_found=True
     ) -> Iterable[CaptionIndex.Document]:
-        return self._tree.eval(_Expr.Context(lexicon, index, documents))
+        return self._tree.eval(_Expr.Context(
+            lexicon, index, documents, ignore_word_not_found))
