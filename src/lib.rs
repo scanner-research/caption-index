@@ -420,8 +420,10 @@ impl RsCaptionIndex {
                                 let token_k = self._internal.read_datum(
                                     (ngram_base_pos + k) * self._internal.datum_size
                                     + d.base_offset + d.tokens_offset);
+
+                                // Move on to the next anchor token location
                                 if !ngram[k].contains(&token_k) {
-                                    break 'curr_ngram_loop;
+                                    continue 'curr_ngram_loop;
                                 }
                             }
                         }
@@ -560,7 +562,7 @@ impl RsCaptionIndex {
                                     (ngram_base_pos + k) * self._internal.datum_size
                                     + d.base_offset + d.tokens_offset);
                                 if !ngram[k].contains(&token_k) {
-                                    break 'curr_ngram_loop;
+                                    continue 'curr_ngram_loop;
                                 }
                             }
                         }
