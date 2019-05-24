@@ -117,6 +117,7 @@ def test_inverted_index():
             assert len(d.postings) > 0
             for l in d.postings:
                 assert l.len == len(tokens)
+                assert abs(l.end - l.start) < 10.0, 'ngram time too large'
             search_ids.add(d.id)
         assert ids == search_ids
 

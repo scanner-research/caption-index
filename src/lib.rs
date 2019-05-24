@@ -209,8 +209,8 @@ impl _RsCaptionIndex {
         let posting_size = self.posting_size();
 
         while max_idx > min_idx {
-            let pivot = (min_idx + max_idx) / 2;
-            let pivot_int = self.read_time_int(base_index_ofs + (pivot as usize) * posting_size);
+            let pivot: usize = (min_idx + max_idx) / 2;
+            let pivot_int = self.read_time_int(base_index_ofs + pivot * posting_size);
             if ms < pivot_int.0 {
                 max_idx = pivot;
             } else if ms > pivot_int.1 {
@@ -237,22 +237,24 @@ impl _RsCaptionIndex {
         let time_int_size = self.time_int_size();
 
         while max_idx > min_idx {
-            let pivot = (min_idx + max_idx) / 2;
-            if pivot + 1 == d.time_int_count as usize {
-                return Some(
-                    (pivot, self.read_time_int(base_index_ofs + (pivot as usize) * posting_size)));
-            }
+            let pivot: usize = (min_idx + max_idx) / 2;
             let pivot_idx = self.read_datum(
-                base_index_ofs + (pivot as usize) * posting_size + time_int_size);
+                base_index_ofs + pivot * posting_size + time_int_size);
+            if pivot + 1 == d.time_int_count as usize {
+                return if idx >= pivot_idx {
+                    Some((pivot, self.read_time_int(base_index_ofs + pivot * posting_size)))
+                } else { None };
+            }
             let pivot_idx_next = self.read_datum(
-                base_index_ofs + ((pivot + 1) as usize) * posting_size + time_int_size);
+                base_index_ofs + (pivot + 1) * posting_size + time_int_size);
+            assert!(pivot_idx_next >= pivot_idx, "Non-increasing idx: {} < {}",
+                    pivot_idx_next, pivot_idx);
             if idx < pivot_idx {
                 max_idx = pivot;
             } else if idx >= pivot_idx && idx < pivot_idx_next {
-                return Some(
-                    (pivot, self.read_time_int(base_index_ofs + (pivot as usize) * posting_size)));
+                return Some((pivot, self.read_time_int(base_index_ofs + pivot * posting_size)));
             } else {
-                min_idx = pivot;
+                min_idx = pivot + 1;
             }
         }
         None
@@ -427,17 +429,17 @@ impl RsCaptionIndex {
                         // All other indices matched
                         let ngram_anchor_time_int = self._internal.read_time_int(
                             base_index_ofs +
-                            (anchor_token_posting_idx + i) * posting_size);
+                            (anchor_token_posting_idx + j) * posting_size);
                         let start_ms = if anchor_idx != 0 {
                             match self._internal.lookup_time_int_by_idx(
                                 d, ngram_base_pos as u32, hint_time_int_idx
                             ) {
-                                Some((new_lower_hint_idx, ngram_start_time_int)) => {
+                                Some((new_hint_idx, ngram_start_time_int)) => {
                                     // assert!(
                                     //     ngram_anchor_time_int.0 >= ngram_start_time_int.0,
                                     //     "inconsistent start time for ngram: {} < {}",
                                     //     ngram_anchor_time_int.0, ngram_start_time_int.0);
-                                    hint_time_int_idx = cmp::max(new_lower_hint_idx, hint_time_int_idx);
+                                    hint_time_int_idx = new_hint_idx;
                                     cmp::min(ngram_start_time_int.0, ngram_anchor_time_int.0)
                                 },
                                 None => ngram_anchor_time_int.0
@@ -467,6 +469,8 @@ impl RsCaptionIndex {
                         ));
                         anchor_used |= true;
                     }
+
+                    // Need to resort if multiple anchor words used
                     if anchor_used {
                         anchors_used += 1;
                     }
