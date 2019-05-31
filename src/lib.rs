@@ -397,12 +397,7 @@ impl RsCaptionIndex {
                 for i in 0..anchor_idx_posting_offsets.len() {
                     let mut anchor_used = false;
                     let anchor_token_posting_idx = anchor_idx_posting_offsets[i].0;
-                    if anchor_token_posting_idx < anchor_idx ||
-                       anchor_token_posting_idx - anchor_idx + ngram_len >= d.length {
-                        continue;
-                    }
                     let anchor_token_posting_count = anchor_idx_posting_offsets[i].1 as usize;
-
                     let mut hint_time_int_idx: usize = 0;
 
                     // Look for ngram around anchor index
@@ -412,6 +407,11 @@ impl RsCaptionIndex {
                             (anchor_token_posting_idx + j) * posting_size +
                             time_int_size
                         ) as usize;
+
+                        if ngram_anchor_pos < anchor_idx ||
+                           ngram_anchor_pos - anchor_idx + ngram_len > d.length {
+                            continue;
+                        }
 
                         // Check indices around anchor index
                         let ngram_base_pos = ngram_anchor_pos - anchor_idx;
@@ -450,8 +450,10 @@ impl RsCaptionIndex {
                             ngram_anchor_time_int.0
                         };
                         let end_ms = if anchor_idx + 1 == ngram_len {
+                            ngram_anchor_time_int.1
+                        } else {
                             match self._internal.lookup_time_int_by_idx(
-                                d, (ngram_base_pos + ngram_len) as u32, hint_time_int_idx
+                                d, (ngram_base_pos + ngram_len - 1) as u32, hint_time_int_idx
                             ) {
                                 Some((_, ngram_end_time_int)) => {
                                     // assert!(
@@ -462,8 +464,6 @@ impl RsCaptionIndex {
                                 },
                                 None => ngram_anchor_time_int.1
                             }
-                        } else {
-                            ngram_anchor_time_int.1
                         };
 
                         postings.push((
@@ -526,6 +526,7 @@ impl RsCaptionIndex {
             }
             let time_int_size = self._internal.time_int_size();
             let posting_size = self._internal.posting_size();
+            let ngram_len = ngram.len();
 
             let has_ngram = |d: &Document| -> bool {
                 let base_index_ofs: usize = d.base_offset + d.inv_index_offset;
@@ -540,10 +541,6 @@ impl RsCaptionIndex {
 
                 for i in 0..anchor_idx_posting_offsets.len() {
                     let anchor_token_posting_idx = anchor_idx_posting_offsets[i].0;
-                    if anchor_token_posting_idx < anchor_idx ||
-                       anchor_token_posting_idx - anchor_idx + ngram.len() >= d.length {
-                        continue;
-                    }
                     let anchor_token_posting_count = anchor_idx_posting_offsets[i].1 as usize;
 
                     // Look for ngram around anchor index
@@ -553,6 +550,11 @@ impl RsCaptionIndex {
                             (anchor_token_posting_idx + j) * posting_size +
                             time_int_size
                         ) as usize;
+
+                        if ngram_anchor_pos < anchor_idx ||
+                           ngram_anchor_pos - anchor_idx + ngram_len > d.length {
+                            continue;
+                        }
 
                         // Check indices around anchor index
                         let ngram_base_pos = ngram_anchor_pos - anchor_idx;

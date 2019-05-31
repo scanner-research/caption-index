@@ -65,10 +65,12 @@ def _get_docs_and_lex(idx_dir):
 
 
 def test_tokenize():
-    text = 'I\'m a string! This is a tokenizer test.'
+    text = 'I\'m a string! This is a tokenizer test; just a test. (A simple test)'
     tokens = list(captions.default_tokenizer().tokens(text))
     assert isinstance(tokens[0], str)
-    assert len(tokens) == 12
+    assert tokens == [
+        'I', "'", 'm', 'a', 'string', '!', 'This', 'is', 'a', 'tokenizer',
+        'test', ';', 'just', 'a', 'test', '.', '(', 'A', 'simple', 'test', ')']
 
 
 def test_lemmatize():
