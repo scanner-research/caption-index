@@ -259,6 +259,160 @@ impl _RsCaptionIndex {
         }
         None
     }
+
+    fn check_is_ngram(&self, ngram: &Vec<TokenIdOneOf>, anchor_idx: usize, document: &Document,
+                      ngram_base_pos: usize) -> bool {
+        for k in 0..ngram.len() {
+            if k != anchor_idx {
+                let token_k = self.read_datum(
+                    (ngram_base_pos + k) * self.datum_size
+                    + document.base_offset + document.tokens_offset);
+
+                // Move on to the next anchor token location
+                if !ngram[k].contains(&token_k) {
+                    return false;
+                }
+            }
+        }
+        true
+    }
+
+    fn lookup_ngram_contains(
+        &self, ngram: &Vec<TokenIdOneOf>, anchor_idx: usize, document: &Document
+    ) -> bool {
+        let base_index_ofs: usize = document.base_offset + document.inv_index_offset;
+        let time_int_size = self.time_int_size();
+        let posting_size = self.posting_size();
+        let ngram_len = ngram.len();
+
+        let anchor_idx_posting_offsets: Vec<(usize, u32)> =
+            ngram[anchor_idx].iter().filter_map(
+                |token| self.lookup_postings(document, *token)
+            ).collect();
+        if anchor_idx_posting_offsets.len() == 0 {
+            return false;    // None of the optons matched
+        }
+
+        for i in 0..anchor_idx_posting_offsets.len() {
+            let anchor_token_posting_idx = anchor_idx_posting_offsets[i].0;
+            let anchor_token_posting_count = anchor_idx_posting_offsets[i].1 as usize;
+
+            // Look for ngram around anchor index
+            for j in 0..anchor_token_posting_count {
+                let ngram_anchor_pos = self.read_datum(
+                    base_index_ofs +
+                    (anchor_token_posting_idx + j) * posting_size +
+                    time_int_size
+                ) as usize;
+
+                if ngram_anchor_pos < anchor_idx ||
+                   ngram_anchor_pos - anchor_idx + ngram_len > document.length {
+                    continue;
+                }
+
+                // Check indices around anchor index
+                let ngram_base_pos = ngram_anchor_pos - anchor_idx;
+                if self.check_is_ngram(ngram, anchor_idx, document, ngram_base_pos) {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    fn lookup_and_load_ngrams(
+        &self, ngram: &Vec<TokenIdOneOf>, anchor_idx: usize, document: &Document
+    ) -> Option<Vec<Posting>> {
+        let base_index_ofs: usize = document.base_offset + document.inv_index_offset;
+        let time_int_size = self.time_int_size();
+        let posting_size = self.posting_size();
+        let ngram_len = ngram.len();
+
+        let anchor_idx_posting_offsets: Vec<(usize, u32)> = ngram[anchor_idx].iter().filter_map(
+            |token| self.lookup_postings(document, *token)
+        ).collect();
+        if anchor_idx_posting_offsets.len() == 0 {
+            return None;    // None of the optons matched
+        }
+
+        let mut postings: Vec<Posting> = vec![];
+        let mut anchors_used = 0;
+        for i in 0..anchor_idx_posting_offsets.len() {
+            let mut anchor_used = false;
+            let anchor_token_posting_idx = anchor_idx_posting_offsets[i].0;
+            let anchor_token_posting_count = anchor_idx_posting_offsets[i].1 as usize;
+            let mut hint_time_int_idx: usize = 0;
+
+            // Look for ngram around anchor index
+            for j in 0..anchor_token_posting_count {
+                let ngram_anchor_pos = self.read_datum(
+                    base_index_ofs +
+                    (anchor_token_posting_idx + j) * posting_size +
+                    time_int_size
+                ) as usize;
+
+                if ngram_anchor_pos < anchor_idx ||
+                   ngram_anchor_pos - anchor_idx + ngram_len > document.length {
+                    continue;
+                }
+
+                // Check indices around anchor index
+                let ngram_base_pos = ngram_anchor_pos - anchor_idx;
+                if self.check_is_ngram(&ngram, anchor_idx, document, ngram_base_pos) {
+                    // All other indices matched
+                    let ngram_anchor_time_int = self.read_time_int(
+                        base_index_ofs +
+                        (anchor_token_posting_idx + j) * posting_size);
+                    let start_ms = if anchor_idx != 0 {
+                        match self.lookup_time_int_by_idx(
+                            document, ngram_base_pos as u32, hint_time_int_idx
+                        ) {
+                            Some((new_hint_idx, ngram_start_time_int)) => {
+                                hint_time_int_idx = new_hint_idx;
+                                cmp::min(ngram_start_time_int.0, ngram_anchor_time_int.0)
+                            },
+                            None => ngram_anchor_time_int.0
+                        }
+                    } else {
+                        ngram_anchor_time_int.0
+                    };
+                    let end_ms = if anchor_idx + 1 == ngram_len {
+                        ngram_anchor_time_int.1
+                    } else {
+                        match self.lookup_time_int_by_idx(
+                            document, (ngram_base_pos + ngram_len - 1) as u32, hint_time_int_idx
+                        ) {
+                            Some((_, ngram_end_time_int)) => {
+                                cmp::max(ngram_end_time_int.1, ngram_anchor_time_int.1)
+                            },
+                            None => ngram_anchor_time_int.1
+                        }
+                    };
+
+                    postings.push((
+                        ms_to_s(start_ms), ms_to_s(end_ms), ngram_base_pos, ngram_len
+                    ));
+                    anchor_used |= true;
+                }
+            }
+
+            // Need to resort if multiple anchor words used
+            if anchor_used {
+                anchors_used += 1;
+            }
+        }
+        if postings.len() > 0 {
+            if anchors_used > 1 {
+                postings.sort_by(|a, b| match a.0.partial_cmp(&b.0) {
+                    Some(ord) => if ord == Ordering::Equal {a.2.cmp(&b.2)} else {ord}
+                    None => a.2.cmp(&b.2)
+                });
+            }
+            Some(postings)
+        } else {
+            None
+        }
+    }
 }
 
 #[pyclass]
@@ -378,121 +532,8 @@ impl RsCaptionIndex {
                 eprintln!("ngram search: {:?} in {} documents", ngram,
                           if doc_ids.len() > 0 {len_str.as_str()} else {"all"});
             }
-            let time_int_size = self._internal.time_int_size();
-            let posting_size = self._internal.posting_size();
-            let ngram_len = ngram.len();
-
-            let is_ngram = |d: &Document, ngram_base_pos: usize| -> bool {
-                for k in 0..ngram_len {
-                    if k != anchor_idx {
-                        let token_k = self._internal.read_datum(
-                            (ngram_base_pos + k) * self._internal.datum_size
-                            + d.base_offset + d.tokens_offset);
-
-                        // Move on to the next anchor token location
-                        if !ngram[k].contains(&token_k) {
-                            return false;
-                        }
-                    }
-                }
-                true
-            };
-
             let load_ngrams = |d: &Document| -> Option<Vec<Posting>> {
-                let base_index_ofs: usize = d.base_offset + d.inv_index_offset;
-
-                let anchor_idx_posting_offsets: Vec<(usize, u32)> = ngram[anchor_idx].iter().filter_map(
-                    |token| self._internal.lookup_postings(d, *token)
-                ).collect();
-                if anchor_idx_posting_offsets.len() == 0 {
-                    return None;    // None of the optons matched
-                }
-
-                let mut postings: Vec<Posting> = vec![];
-                let mut anchors_used = 0;
-                for i in 0..anchor_idx_posting_offsets.len() {
-                    let mut anchor_used = false;
-                    let anchor_token_posting_idx = anchor_idx_posting_offsets[i].0;
-                    let anchor_token_posting_count = anchor_idx_posting_offsets[i].1 as usize;
-                    let mut hint_time_int_idx: usize = 0;
-
-                    // Look for ngram around anchor index
-                    for j in 0..anchor_token_posting_count {
-                        let ngram_anchor_pos = self._internal.read_datum(
-                            base_index_ofs +
-                            (anchor_token_posting_idx + j) * posting_size +
-                            time_int_size
-                        ) as usize;
-
-                        if ngram_anchor_pos < anchor_idx ||
-                           ngram_anchor_pos - anchor_idx + ngram_len > d.length {
-                            continue;
-                        }
-
-                        // Check indices around anchor index
-                        let ngram_base_pos = ngram_anchor_pos - anchor_idx;
-                        if is_ngram(d, ngram_base_pos) {
-                            // All other indices matched
-                            let ngram_anchor_time_int = self._internal.read_time_int(
-                                base_index_ofs +
-                                (anchor_token_posting_idx + j) * posting_size);
-                            let start_ms = if anchor_idx != 0 {
-                                match self._internal.lookup_time_int_by_idx(
-                                    d, ngram_base_pos as u32, hint_time_int_idx
-                                ) {
-                                    Some((new_hint_idx, ngram_start_time_int)) => {
-                                        // assert!(
-                                        //     ngram_anchor_time_int.0 >= ngram_start_time_int.0,
-                                        //     "inconsistent start time for ngram: {} < {}",
-                                        //     ngram_anchor_time_int.0, ngram_start_time_int.0);
-                                        hint_time_int_idx = new_hint_idx;
-                                        cmp::min(ngram_start_time_int.0, ngram_anchor_time_int.0)
-                                    },
-                                    None => ngram_anchor_time_int.0
-                                }
-                            } else {
-                                ngram_anchor_time_int.0
-                            };
-                            let end_ms = if anchor_idx + 1 == ngram_len {
-                                ngram_anchor_time_int.1
-                            } else {
-                                match self._internal.lookup_time_int_by_idx(
-                                    d, (ngram_base_pos + ngram_len - 1) as u32, hint_time_int_idx
-                                ) {
-                                    Some((_, ngram_end_time_int)) => {
-                                        // assert!(
-                                        //     ngram_anchor_time_int.1 <= ngram_end_time_int.1,
-                                        //     "inconsistent end time for ngram: {} > {}",
-                                        //     ngram_anchor_time_int.1, ngram_end_time_int.1);
-                                        cmp::max(ngram_end_time_int.1, ngram_anchor_time_int.1)
-                                    },
-                                    None => ngram_anchor_time_int.1
-                                }
-                            };
-
-                            postings.push((
-                                ms_to_s(start_ms), ms_to_s(end_ms), ngram_base_pos, ngram_len
-                            ));
-                            anchor_used |= true;
-                        }
-                    }
-
-                    // Need to resort if multiple anchor words used
-                    if anchor_used {
-                        anchors_used += 1;
-                    }
-                }
-                if postings.len() > 0 {
-                    if anchors_used > 1 {
-                        postings.sort_by(|a, b| match a.0.partial_cmp(&b.0) {
-                            Some(ord) => if ord == Ordering::Equal {a.2.cmp(&b.2)} else {ord}
-                            None => a.2.cmp(&b.2)
-                        });
-                    }
-                    Some(postings)
-                } else {
-                    None
-                }
+                self._internal.lookup_and_load_ngrams(&ngram, anchor_idx, d)
             };
             let docs_to_ngrams =
                 if doc_ids.len() > 0 {
@@ -529,62 +570,8 @@ impl RsCaptionIndex {
                 eprintln!("ngram contains: {:?} in {} documents", ngram,
                           if doc_ids.len() > 0 {len_str.as_str()} else {"all"});
             }
-            let time_int_size = self._internal.time_int_size();
-            let posting_size = self._internal.posting_size();
-            let ngram_len = ngram.len();
-
-            let is_ngram = |d: &Document, ngram_base_pos: usize| -> bool {
-                for k in 0..ngram_len {
-                    if k != anchor_idx {
-                        let token_k = self._internal.read_datum(
-                            (ngram_base_pos + k) * self._internal.datum_size
-                            + d.base_offset + d.tokens_offset);
-
-                        // Move on to the next anchor token location
-                        if !ngram[k].contains(&token_k) {
-                            return false;
-                        }
-                    }
-                }
-                true
-            };
-
             let has_ngram = |d: &Document| -> bool {
-                let base_index_ofs: usize = d.base_offset + d.inv_index_offset;
-
-                let anchor_idx_posting_offsets: Vec<(usize, u32)> =
-                    ngram[anchor_idx].iter().filter_map(
-                        |token| self._internal.lookup_postings(d, *token)
-                    ).collect();
-                if anchor_idx_posting_offsets.len() == 0 {
-                    return false;    // None of the optons matched
-                }
-
-                for i in 0..anchor_idx_posting_offsets.len() {
-                    let anchor_token_posting_idx = anchor_idx_posting_offsets[i].0;
-                    let anchor_token_posting_count = anchor_idx_posting_offsets[i].1 as usize;
-
-                    // Look for ngram around anchor index
-                    for j in 0..anchor_token_posting_count {
-                        let ngram_anchor_pos = self._internal.read_datum(
-                            base_index_ofs +
-                            (anchor_token_posting_idx + j) * posting_size +
-                            time_int_size
-                        ) as usize;
-
-                        if ngram_anchor_pos < anchor_idx ||
-                           ngram_anchor_pos - anchor_idx + ngram_len > d.length {
-                            continue;
-                        }
-
-                        // Check indices around anchor index
-                        let ngram_base_pos = ngram_anchor_pos - anchor_idx;
-                        if is_ngram(d, ngram_base_pos) {
-                            return true;
-                        }
-                    }
-                }
-                false
+                self._internal.lookup_ngram_contains(&ngram, anchor_idx, d)
             };
             let docs_w_ngram =
                 if doc_ids.len() > 0 {
