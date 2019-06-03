@@ -110,7 +110,7 @@ GRAMMAR = Grammar(r"""
     tokens = token more_tokens
     more_tokens = (sp token)*
 
-    token = ~r"[^\s()&|\^\[\]]+"
+    token = ~r"[^\s()&|\^\[\]:/]+"
 
     sp = ~r"\s+"
 """)
