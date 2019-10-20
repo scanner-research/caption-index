@@ -79,6 +79,7 @@ from typing import Dict, List, Iterable, NamedTuple, Optional
 from parsimonious.grammar import Grammar, NodeVisitor
 
 from .index import Lexicon, CaptionIndex
+from .tokenize import default_tokenizer
 from .util import PostingUtil, group_results_by_document
 
 
@@ -426,10 +427,12 @@ class _QueryParser(NodeVisitor):
 
     def visit_tokens(self, node, children):
         assert len(children) == 2
-        return [children[0], *children[1]]
+        return [*children[0], *[t for c in children[1] for t in c]]
 
     def visit_token(self, node, children):
-        return _Phrase.Token(node.text, False)
+        tokenizer = default_tokenizer()
+        tokens = tokenizer.tokens(node.text)
+        return [_Phrase.Token(t, False) for t in tokens]
 
     def generic_visit(self, node, children):
         return children[-1] if children else None
