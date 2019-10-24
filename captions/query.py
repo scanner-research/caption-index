@@ -219,6 +219,9 @@ class _And(_JoinExpr):
         results = []
         for c in self.children:
             child_results = deque(c.eval(context))
+            if len(child_results) == 0:
+                return
+
             doc_ids = [d.id for d in child_results]
             context = context._replace(documents=doc_ids)
             results.append({d.id: d.postings for d in child_results})
@@ -232,6 +235,7 @@ class _And(_JoinExpr):
             pq = []
             i = 0
             for r in results:
+                assert doc_id in r
                 ps_iter = iter(r[doc_id])
                 ps_head = next(ps_iter)
                 pq.append((ps_head.start, i, ps_head, ps_iter))
