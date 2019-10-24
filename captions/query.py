@@ -32,23 +32,23 @@ And: &
 
   e1 & e2 & e3 // w     same as above, but with w tokens as the threshold
 
-Not near: ^
-  e1 ^ e2 ^ e3 ...      expr1, not near expr2 and not near expr3
+Not near: \
+  e1 \ e2 \ e3 ...      expr1, not near expr2 and not near expr3
                         I.e., instances of e1 not in any window containing
                         e1 or e2.
 
-                        This is equivalent to (e1 ^ (e2 | e3)) and
-                        ((e1 ^ e2) ^ e3).
+                        This is equivalent to (e1 \ (e2 | e3)) and
+                        ((e1 \ e2) \ e3).
 
-  e1 ^ e2 ^ e3 :: t     same as above, but with t seconds as the window
+  e1 \ e2 \ e3 :: t     same as above, but with t seconds as the window
 
-  e1 ^ e2 ^ e3 // w     same as above, but with w tokens as the threshold
+  e1 \ e2 \ e3 // w     same as above, but with w tokens as the threshold
 
 Groups: ()
   (expr)          evaluate expr as a group
 
 [ Group caveats ]
-    &, |, and ^ cannot be combined in the same group. For instance,
+    &, |, and \ cannot be combined in the same group. For instance,
     "(a & b | c)" is invalid and should be written as "(a & (b | c))" or
     "((a & b) | c)".
 
@@ -64,12 +64,11 @@ Groups: ()
     All instances of "united" and "states" where each "united" is near a
     "states" and each "states" is near a "united".
 
-  united ^ states
+  united \ states
     All instances of "united", without "states" nearby.
 
-  united ^ (states | kingdom) ==equiv== united ^ states ^ kingdom)
+  united \ (states | kingdom) ==equiv== united \ states \ kingdom)
     All instances of "united", without "states" and without "kingdom" nearby.
-
 """
 
 import heapq
@@ -97,7 +96,7 @@ GRAMMAR = Grammar(r"""
     more_or = (sp? "|" sp? expr)+
 
     not = expr more_not threshold?
-    more_not = (sp? "^" sp?  expr)+
+    more_not = (sp? "\\" sp?  expr)+
 
     threshold = sp? threshold_type sp? integer
     threshold_type = "::" / "//"
@@ -111,7 +110,7 @@ GRAMMAR = Grammar(r"""
     tokens = token more_tokens
     more_tokens = (sp token)*
 
-    token = ~r"[^\s()&|\^\[\]:/]+"
+    token = ~r"[^\s()&|\\\[\]:/]+"
 
     sp = ~r"\s+"
 """)
@@ -330,7 +329,7 @@ class _Not(_JoinExpr):
             postings = []
             for p1 in d.postings:
                 for p2 in other_postings.get(d.id, []):
-                    if dist_fn(p1, p2) >= self.threshold:
+                    if dist_fn(p1, p2) < self.threshold:
                         break
                 else:
                     postings.append(p1)
@@ -338,8 +337,8 @@ class _Not(_JoinExpr):
                 yield CaptionIndex.Document(id=d.id, postings=postings)
 
 
-DEFAULT_AND_THRESH = 5
-DEFAULT_NOT_THRESH = 5
+DEFAULT_AND_THRESH = 15
+DEFAULT_NOT_THRESH = 15
 
 
 class _QueryParser(NodeVisitor):
