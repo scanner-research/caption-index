@@ -7,9 +7,10 @@ while limiting resident memory usage and IO/computational latency.
 
 ## Install
 
-Run `python3 setup.py install --user`
+First, install Rust and configure Rust nightly in the caption-index
+code directory (tested with version 1.32.0).
 
-Run `.get_models.sh` to download the spacy model required for tokenization.
+Run `python3 setup.py install --user`
 
 ## Usage
 
