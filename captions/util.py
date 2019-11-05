@@ -111,24 +111,10 @@ class PostingUtil(object):
             else:
                 return (p.idx, p.start)
 
-        result = []
-        pq = []
-        for i, ps_list in enumerate(postings_lists):
-            ps_iter = iter(ps_list)
-            ps_head = next(ps_iter)
-            pq.append((get_priority(ps_head), i, ps_head, ps_iter))
-        heapq.heapify(pq)
+        postings_lists_with_priority = [
+            ((get_priority(p), p) for p in pl) for pl in postings_lists]
 
-        while len(pq) > 0:
-            _, i, ps_head, ps_iter = heapq.heappop(pq)
-            result.append(ps_head)
-            try:
-                ps_head = next(ps_iter)
-                heapq.heappush(pq, (get_priority(ps_head), i, ps_head,
-                                    ps_iter))
-            except StopIteration:
-                pass
-        return result
+        return [r[1] for r in heapq.merge(*postings_lists_with_priority)]
 
 
 def group_results_by_document(
@@ -137,27 +123,16 @@ def group_results_by_document(
     Tuple[int, List[List[CaptionIndex.Posting]]], None, None
 ]:
     """Group postings of documents from multiple results"""
-    pq = []
-    for i, docs in enumerate(results):
-        try:
-            doc_head = next(docs)
-            pq.append((doc_head.id, i, doc_head, docs))
-        except StopIteration:
-            pass
-    heapq.heapify(pq)
-
-    while len(pq) > 0:
-        curr_doc_head = pq[0][2]
-        curr_doc_postings_lists = []
-        while len(pq) > 0:
-            if pq[0][0] == curr_doc_head.id:
-                _, i, doc_head, docs = heapq.heappop(pq)
-                curr_doc_postings_lists.append(doc_head.postings)
-                try:
-                    doc_head = next(docs)
-                    heapq.heappush(pq, (doc_head.id, i, doc_head, docs))
-                except StopIteration:
-                    pass
-            else:
-                break
-        yield curr_doc_head.id, curr_doc_postings_lists
+    result_with_id = [((d.id, d) for d in r) for r in results]
+    curr_doc_id = None
+    curr_docs = []
+    for doc_id, document in heapq.merge(*result_with_id):
+        if curr_doc_id is None:
+            curr_doc_id = doc_id
+        if curr_doc_id != doc_id:
+            yield curr_doc_id, [d.postings for d in curr_docs]
+            curr_doc_id = doc_id
+            curr_docs = []
+        curr_docs.append(document)
+    if len(curr_docs) > 0:
+        yield curr_doc_id, [d.postings for d in curr_docs]

@@ -233,13 +233,11 @@ class _And(_JoinExpr):
         n = len(results)
         for doc_id in sorted(doc_ids):
             pq = []
-            i = 0
-            for r in results:
+            for i, r in enumerate(results):
                 assert doc_id in r
                 ps_iter = iter(r[doc_id])
                 ps_head = next(ps_iter)
                 pq.append((ps_head.start, i, ps_head, ps_iter))
-                i += 1
             heapq.heapify(pq)
 
             merged_postings = []
@@ -273,7 +271,6 @@ class _And(_JoinExpr):
                 try:
                     ps_head = next(ps_iter)
                     heapq.heappush(pq, (ps_head.start, i, ps_head, ps_iter))
-                    i += 1
                 except StopIteration:
                     pass
 
@@ -328,15 +325,33 @@ class _Not(_JoinExpr):
             _dist_time_posting if self.threshold_type == 't' else
             _dist_idx_posting)
 
-        # TODO: this is a silly way to join
+        key_fn = (
+            (lambda x: x.start) if self.threshold_type == 't' else
+            (lambda x: x.idx))
+
         for d in child0_results:
             postings = []
-            for p1 in d.postings:
-                for p2 in other_postings.get(d.id, []):
-                    if dist_fn(p1, p2) < self.threshold:
-                        break
-                else:
-                    postings.append(p1)
+            doc_ops = other_postings.get(d.id, [])
+            doc_op_i = 0
+
+            prev_op = None
+            for p in d.postings:
+                p_key = key_fn(p)
+                while (
+                    doc_op_i < len(doc_ops)
+                    and key_fn(doc_ops[doc_op_i]) <= p_key
+                ):
+                    prev_op = doc_ops[doc_op_i]
+                    doc_op_i += 1
+
+                if prev_op and dist_fn(p, prev_op) < self.threshold:
+                    continue
+                if (
+                    doc_op_i < len(doc_ops)
+                    and dist_fn(p, doc_ops[doc_op_i]) < self.threshold
+                ):
+                    continue
+                postings.append(p)
             if len(postings) > 0:
                 yield CaptionIndex.Document(id=d.id, postings=postings)
 

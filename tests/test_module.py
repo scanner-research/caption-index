@@ -210,7 +210,7 @@ def test_script_search():
     idx_dir = os.path.join(TMP_DIR, TEST_INDEX_SUBDIR)
     search.main(idx_dir, ['GOOD', '&', 'MORNING'], False, 3)
     search.main(idx_dir, ['GOOD', '|', 'MORNING'], False, 3)
-    search.main(idx_dir, ['UNITED STATES', '^', 'DONALD TRUMP'], False, 3)
+    search.main(idx_dir, ['UNITED STATES', '\\', 'DONALD TRUMP'], False, 3)
 
 
 def test_script_build_metadata():
