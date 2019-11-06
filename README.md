@@ -7,10 +7,11 @@ while limiting resident memory usage and IO/computational latency.
 
 ## Install
 
-First, install Rust and configure Rust nightly in the caption-index
-code directory (tested with version 1.32.0).
+First, install Rust. Configure Rust nightly in the caption-index
+code directory (tested with version 1.39.0). On Linux, this can be set with
+`rustup override set nightly-2019-09-01` in the cloned repository directory.
 
-Run `python3 setup.py install --user`
+Run `python3 setup.py install --user`.
 
 ## Usage
 

@@ -10,7 +10,7 @@ use rayon::prelude::*;
 use pyo3::prelude::*;
 use pyo3::exceptions;
 use pyo3::types::PyBytes;
-use pyo3::python::Python;
+use pyo3::Python;
 use std::collections::BTreeMap;
 use std::cmp;
 use std::cmp::Ordering;
@@ -684,16 +684,17 @@ impl RsCaptionIndex {
     ) -> PyResult<()> {
         let mmap = MmapOptions::new().map(&File::open(&index_file)?);
         match mmap {
-            Ok(m) => obj.init(|_| {
+            Ok(m) => {
                 let docs = parse_index(&m, datum_size, start_time_size, end_time_size, debug);
-                RsCaptionIndex {
+                obj.init(RsCaptionIndex {
                     _internal: _RsCaptionIndex {
                         docs: docs, data: m, datum_size: datum_size,
                         start_time_size: start_time_size, end_time_size: end_time_size
                     },
                     debug: debug
-                }
-            }),
+                });
+                Ok(())
+            },
             Err(s) => Err(exceptions::Exception::py_err(s.to_string()))
         }
     }
@@ -710,7 +711,9 @@ struct RsMetadataIndex {
 #[pymethods]
 impl RsMetadataIndex {
 
-    fn metadata(&self, doc_id: DocumentId, position: usize, n: usize) -> PyResult<Vec<Py<PyBytes>>> {
+    fn metadata(
+        &self, doc_id: DocumentId, position: usize, n: usize
+    ) -> PyResult<Vec<Py<PyBytes>>> {
         if self.debug {
             eprintln!("Metdata: {}+{} in {}", position, position, doc_id);
         }
@@ -723,7 +726,10 @@ impl RsMetadataIndex {
                 let py = gil.python();
                 for i in position..max_idx {
                     let ofs = i * self.entry_size;
-                    result.push(PyBytes::new(py, &data[ofs..ofs + self.entry_size]));
+
+                    // This feels very unsafe...
+                    let bytes = PyBytes::new(py, &data[ofs..ofs + self.entry_size]);
+                    result.push(unsafe { Py::from_owned_ptr(bytes.into_ptr()) });
                 }
                 Ok(result)
             },
@@ -732,8 +738,9 @@ impl RsMetadataIndex {
     }
 
     #[new]
-    unsafe fn __new__(obj: &PyRawObject, meta_file: String, entry_size: usize, debug: bool)
-                      -> PyResult<()> {
+    unsafe fn __new__(
+        obj: &PyRawObject, meta_file: String, entry_size: usize, debug: bool
+    ) -> PyResult<()> {
         let parse_meta = |m: &Mmap| {
             let mut docs = BTreeMap::new();
             let meta_size = m.len();
@@ -754,18 +761,19 @@ impl RsMetadataIndex {
 
         let mmap = MmapOptions::new().map(&File::open(&meta_file)?);
         match mmap {
-            Ok(m) => obj.init(|_| {
-                RsMetadataIndex {
+            Ok(m) => {
+                obj.init(RsMetadataIndex {
                     docs: parse_meta(&m), data: m, entry_size: entry_size, debug: debug
-                }
-            }),
+                });
+                Ok(())
+            },
             Err(s) => Err(exceptions::Exception::py_err(s.to_string()))
         }
     }
 }
 
-#[pymodinit]
-fn rs_captions(_py: Python, m: &PyModule) -> PyResult<()> {
+#[pymodule]
+fn rs_captions(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
     m.add_class::<RsCaptionIndex>()?;
     m.add_class::<RsMetadataIndex>()?;
     Ok(())
