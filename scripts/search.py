@@ -45,8 +45,11 @@ BOLD_ATTRS = ['bold']
 
 
 def run_search(query_str, documents, lexicon, index, context_size, silent):
-    start_time = time.time()
     query = Query(query_str)
+    print('Estimated cost (% of index scanned): {}'.format(
+          query.estimate_cost(lexicon) * 100))
+
+    start_time = time.time()
     result = query.execute(lexicon, index)
 
     total_seconds = 0

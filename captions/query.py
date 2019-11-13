@@ -125,7 +125,11 @@ class _Expr(ABC):
         ignore_word_not_found: bool
 
     @abstractmethod
-    def eval(self, context) -> Iterable[CaptionIndex.Document]:
+    def eval(self, context: '_Expr.Context') -> Iterable[CaptionIndex.Document]:
+        raise NotImplementedError()
+
+    @abstractmethod
+    def estimate_cost(self, lexicon: Lexicon) -> float:
         raise NotImplementedError()
 
     @abstractproperty
@@ -143,6 +147,9 @@ class _JoinExpr(_Expr):
         self.children = children
         self.threshold = threshold
         self.threshold_type = threshold_type
+
+    def estimate_cost(self, lexicon):
+        return sum(c.estimate_cost(lexicon) for c in self.children)
 
 
 class _Phrase(_Expr):
@@ -189,6 +196,26 @@ class _Phrase(_Expr):
 
         for d in context.index.ngram_search(*ngram_tokens, **kwargs):
             yield d
+
+    def estimate_cost(self, lexicon):
+        # The cost to search is the frequency of the least frequent token
+        # in the ngram since this is the number of locations that need to
+        # be checked.
+        min_token_count = lexicon.word_count
+        for t in self.tokens:
+            token_count = 0
+            if t.expand:
+                tokens = [lexicon[x] for x in
+                          lexicon.similar(t.text)]
+                token_count += sum(x.count for x in tokens)
+            else:
+                try:
+                    token = lexicon[t.text]
+                    token_count += token.count
+                except Lexicon.WordDoesNotExist:
+                    pass
+            min_token_count = min(token_count, min_token_count)
+        return min_token_count / lexicon.word_count
 
 
 def _dist_time_posting(p1, p2):
@@ -468,3 +495,6 @@ class Query(object):
     ) -> Iterable[CaptionIndex.Document]:
         return self._tree.eval(_Expr.Context(
             lexicon, index, documents, ignore_word_not_found))
+
+    def estimate_cost(self, lexicon: Lexicon) -> float:
+        return self._tree.estimate_cost(lexicon)

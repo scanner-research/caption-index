@@ -48,9 +48,11 @@ class Lexicon(object):
         assert isinstance(words, list)
         self._words = words
         self._inverse = {}
+        self._word_count = 0
         for i, w in enumerate(words):
             assert w.id == i
             self._inverse[w.token] = w
+            self._word_count += w.count
         if not lazy_lemmas:
             self.__init_lemmas()
             assert self._lemmatizer is not None
@@ -87,6 +89,10 @@ class Lexicon(object):
 
     def __len__(self) -> int:
         return len(self._words)
+
+    @property
+    def word_count(self) -> int:
+        return self._word_count
 
     def similar(self, key: WordIdOrString) -> Set[int]:
         """Return words that are similar (share the same lemma)"""
