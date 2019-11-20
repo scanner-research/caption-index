@@ -7,7 +7,8 @@ try:
 except ImportError:
     import subprocess
 
-    errno = subprocess.call([sys.executable, '-m', 'pip', 'install', 'setuptools-rust'])
+    errno = subprocess.call([
+        sys.executable, '-m', 'pip', 'install', 'setuptools-rust'])
     if errno:
         print('Please install setuptools-rust package')
         raise SystemExit(errno)
@@ -29,7 +30,7 @@ tests_require = install_requires + ['pytest>=4.2.1', 'pyaml>=18.11.0']
 
 setup(
     name='caption-index',
-    version='0.2.0',
+    version='0.3.0',
     classifiers=[],
     packages=['captions'],
     rust_extensions=[RustExtension('captions.rs_captions', 'Cargo.toml')],
