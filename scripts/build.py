@@ -15,7 +15,7 @@ from multiprocessing import Pool
 from subprocess import check_call
 from threading import Lock
 from tqdm import tqdm
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Optional
 
 from captions import Lexicon, Documents, BinaryFormat, default_tokenizer
 
@@ -48,6 +48,8 @@ def get_args():
     p.add_argument('-j', dest='workers', type=int, default=DEFAULT_WORKERS,
                    help='Number of CPU cores to use. Default: {}'.format(
                         DEFAULT_WORKERS))
+    p.add_argument('--chunk-size', dest='chunk_size', type=int,
+                   help='Break the index into chunks of n documents')
     p.add_argument('--ext', dest='extension',
                    default=DEFAULT_SOURCE_FILE_EXT,
                    help='Subtitle file extension. Default: {}'.format(
@@ -222,9 +224,8 @@ def index_single_doc(doc_id: int, doc_path: str, out_path: str):
 
 
 def index_all_docs(doc_dir: str, documents: Documents, lexicon: Lexicon,
-                   out_file: str, tmp_dir: str):
+                   out_path: str, tmp_dir: str, chunk_size: Optional[int]):
     """Builds inverted indexes and reencode documents in binary"""
-
     global WORKER_LEXICON
     WORKER_LEXICON = lexicon
 
@@ -237,26 +238,38 @@ def index_all_docs(doc_dir: str, documents: Documents, lexicon: Lexicon,
         results = deque()
         for doc in documents:
             doc_path = os.path.join(doc_dir, doc.name)
-            out_path = os.path.join(tmp_dir, str(doc.id))
+            doc_out_path = os.path.join(tmp_dir, str(doc.id))
             async_result = pool.apply_async(
-                index_single_doc, (doc.id, doc_path, out_path),
+                index_single_doc, (doc.id, doc_path, doc_out_path),
                 callback=progress)
-            results.append((async_result, out_path))
+            results.append((async_result, doc_out_path))
 
         for async_result, _ in results:
             async_result.get()
 
         # Cat the files together (in batches to avoid too many args)
-        doc_index_paths = [x for _, x in results]
-        batch_size = 1000
-        with open(out_file, 'wb') as f:
-            for i in range(0, len(doc_index_paths), batch_size):
-                max_idx = min(i + batch_size, len(doc_index_paths))
-                check_call(['cat'] + doc_index_paths[i:max_idx], stdout=f)
+        all_doc_index_paths = [x for _, x in results]
+
+        def merge_index_files(doc_index_paths, out_path, batch_size=1000):
+            with open(out_path, 'wb') as f:
+                for i in range(0, len(doc_index_paths), batch_size):
+                    max_idx = min(i + batch_size, len(doc_index_paths))
+                    check_call(['cat'] + doc_index_paths[i:max_idx], stdout=f)
+
+        if chunk_size is None:
+            merge_index_files(all_doc_index_paths, out_path)
+        else:
+            os.makedirs(out_path)
+            for i in range(0, len(all_doc_index_paths), chunk_size):
+                out_file = os.path.join(
+                    out_path, '{}-{}.bin'.format(
+                        i, min(i + chunk_size, len(all_doc_index_paths))))
+                merge_index_files(
+                    all_doc_index_paths[i:i + chunk_size], out_file)
 
 
-def main(doc_dir, out_dir, workers, extension=DEFAULT_SOURCE_FILE_EXT,
-         limit=None):
+def main(doc_dir, out_dir, workers, chunk_size=None,
+         extension=DEFAULT_SOURCE_FILE_EXT, limit=None):
     global N_WORKERS
     N_WORKERS = workers
 
@@ -296,7 +309,8 @@ def main(doc_dir, out_dir, workers, extension=DEFAULT_SOURCE_FILE_EXT,
     index_path = os.path.join(out_dir, 'index.bin')
     os.makedirs(tmp_dir)
     try:
-        index_all_docs(doc_dir, documents, lexicon, index_path, tmp_dir)
+        index_all_docs(doc_dir, documents, lexicon, index_path, tmp_dir,
+                       chunk_size)
     finally:
         shutil.rmtree(tmp_dir)
 
