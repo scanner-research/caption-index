@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 use std::cmp;
 use std::cmp::Ordering;
 use std::mem;
-use std::fs::File;
+use std::fs::{File, metadata, read_dir};
 use memmap::{MmapOptions, Mmap};
 
 use common::*;
@@ -16,6 +16,10 @@ use common::*;
 type Posting = (Seconds, Seconds, Position, usize);
 
 struct Document {
+    // The file containing the document index
+    file_num: usize,
+
+    // Byte offset in file
     base_offset: usize,
 
     // Length in milliseconds
@@ -38,8 +42,9 @@ struct Document {
     length: usize,
 }
 
-fn parse_index(m: &Mmap, datum_size: usize, start_time_size: usize, end_time_size: usize,
-               debug: bool) -> BTreeMap<DocumentId, Document> {
+fn parse_index(m: &Mmap, file_num: usize, datum_size: usize,
+               start_time_size: usize, end_time_size: usize, debug: bool
+) -> BTreeMap<DocumentId, Document> {
     let mut docs = BTreeMap::new();
 
     let u32_size = mem::size_of::<u32>();
@@ -72,7 +77,7 @@ fn parse_index(m: &Mmap, datum_size: usize, start_time_size: usize, end_time_siz
         }
 
         docs.insert(doc_id, Document {
-            base_offset: base_offset, duration: duration,
+            file_num: file_num, base_offset: base_offset, duration: duration,
             lexicon_offset: lexicon_offset, unique_token_count: unique_token_count,
             inv_index_offset: inv_index_offset, posting_count: posting_count,
             time_index_offset: time_index_offset, time_int_count: time_int_count,
@@ -89,7 +94,7 @@ fn parse_index(m: &Mmap, datum_size: usize, start_time_size: usize, end_time_siz
 
 struct _RsCaptionIndex {
     docs: BTreeMap<DocumentId, Document>,
-    data: Mmap,
+    data: Vec<Mmap>,
     datum_size: usize,
     start_time_size: usize,
     end_time_size: usize,
@@ -105,17 +110,18 @@ impl _RsCaptionIndex {
         self.time_int_size() + self.datum_size
     }
 
-    fn read_datum(&self, i: usize) -> u32 {
-        read_mmap(&self.data, i, self.datum_size)
+    fn read_datum(&self, m: &Mmap, i: usize) -> u32 {
+        read_mmap(m, i, self.datum_size)
     }
 
-    fn read_time_int(&self, i: usize) -> (Millis, Millis) {
-        let start = read_mmap(&self.data, i, self.start_time_size);
-        let diff = read_mmap(&self.data, i + self.start_time_size, self.end_time_size);
+    fn read_time_int(&self, m: &Mmap, i: usize) -> (Millis, Millis) {
+        let start = read_mmap(m, i, self.start_time_size);
+        let diff = read_mmap(m, i + self.start_time_size, self.end_time_size);
         (start, start + diff)
     }
 
     fn lookup_postings(&self, d: &Document, token: TokenId) -> Option<(usize, u32)> {
+        let m = &self.data[d.file_num];
         let mut min_idx = 0;
         let mut max_idx = d.unique_token_count as usize;
         let token_entry_size = 2 * self.datum_size;
@@ -126,12 +132,12 @@ impl _RsCaptionIndex {
             }
             let pivot = (min_idx + max_idx) / 2;
             let ofs = pivot * token_entry_size + base_lexicon_offset;
-            let pivot_token = self.read_datum(ofs);
+            let pivot_token = self.read_datum(m, ofs);
             if pivot_token == token {
-                let posting_idx = self.read_datum(ofs + self.datum_size);
+                let posting_idx = self.read_datum(m, ofs + self.datum_size);
                 let n = if pivot < (d.unique_token_count as usize) - 1 {
                     // Get start of next entry
-                    self.read_datum(ofs + token_entry_size + self.datum_size)
+                    self.read_datum(m, ofs + token_entry_size + self.datum_size)
                 } else {
                     d.posting_count
                 } - posting_idx;
@@ -147,6 +153,7 @@ impl _RsCaptionIndex {
 
     fn read_postings(&self, d: &Document, idx: usize, n: u32) -> Vec<Posting> {
         assert!((idx as u32) + n <= d.posting_count, "Index + n exceeds total postings");
+        let m = &self.data[d.file_num];
         let time_int_size = self.time_int_size();
         let posting_size = self.posting_size();
         let base_ofs = d.base_offset + d.inv_index_offset;
@@ -154,14 +161,15 @@ impl _RsCaptionIndex {
         let mut postings = Vec::with_capacity(n as usize);
         for i in 0..(n as usize) {
             let ofs = (idx + i) * posting_size + base_ofs;
-            let time_int = self.read_time_int(ofs);
-            let pos = self.read_datum(ofs + time_int_size) as usize;
+            let time_int = self.read_time_int(m, ofs);
+            let pos = self.read_datum(m, ofs + time_int_size) as usize;
             postings.push((ms_to_s(time_int.0), ms_to_s(time_int.1), pos, 1))
         }
         postings
     }
 
     fn lookup_time_int(&self, d: &Document, ms: Millis) -> Option<usize> {
+        let m = &self.data[d.file_num];
         let mut min_idx: usize = 0;
         let mut max_idx = d.time_int_count as usize;
         let base_index_ofs = d.base_offset + d.time_index_offset;
@@ -169,7 +177,7 @@ impl _RsCaptionIndex {
 
         while max_idx > min_idx {
             let pivot: usize = (min_idx + max_idx) / 2;
-            let pivot_int = self.read_time_int(base_index_ofs + pivot * posting_size);
+            let pivot_int = self.read_time_int(m, base_index_ofs + pivot * posting_size);
             if ms < pivot_int.0 {
                 max_idx = pivot;
             } else if ms > pivot_int.1 {
@@ -189,6 +197,7 @@ impl _RsCaptionIndex {
     fn lookup_time_int_by_idx(
         &self, d: &Document, idx: u32, hint_idx: usize
     ) -> Option<(usize, (Millis, Millis))> {
+        let m = &self.data[d.file_num];
         let mut min_idx: usize = hint_idx;
         let mut max_idx = d.time_int_count as usize;
         let base_index_ofs = d.base_offset + d.time_index_offset;
@@ -198,20 +207,20 @@ impl _RsCaptionIndex {
         while max_idx > min_idx {
             let pivot: usize = (min_idx + max_idx) / 2;
             let pivot_idx = self.read_datum(
-                base_index_ofs + pivot * posting_size + time_int_size);
+                m, base_index_ofs + pivot * posting_size + time_int_size);
             if pivot + 1 == d.time_int_count as usize {
                 return if idx >= pivot_idx {
-                    Some((pivot, self.read_time_int(base_index_ofs + pivot * posting_size)))
+                    Some((pivot, self.read_time_int(m, base_index_ofs + pivot * posting_size)))
                 } else { None };
             }
             let pivot_idx_next = self.read_datum(
-                base_index_ofs + (pivot + 1) * posting_size + time_int_size);
+                m, base_index_ofs + (pivot + 1) * posting_size + time_int_size);
             assert!(pivot_idx_next >= pivot_idx, "Non-increasing idx: {} < {}",
                     pivot_idx_next, pivot_idx);
             if idx < pivot_idx {
                 max_idx = pivot;
             } else if idx >= pivot_idx && idx < pivot_idx_next {
-                return Some((pivot, self.read_time_int(base_index_ofs + pivot * posting_size)));
+                return Some((pivot, self.read_time_int(m, base_index_ofs + pivot * posting_size)));
             } else {
                 min_idx = pivot + 1;
             }
@@ -221,11 +230,12 @@ impl _RsCaptionIndex {
 
     fn check_is_ngram(&self, ngram: &Vec<TokenIdOneOf>, anchor_idx: usize, document: &Document,
                       ngram_base_pos: usize) -> bool {
+        let m = &self.data[document.file_num];
         for k in 0..ngram.len() {
             if k != anchor_idx {
                 let token_k = self.read_datum(
-                    (ngram_base_pos + k) * self.datum_size
-                    + document.base_offset + document.tokens_offset);
+                    m, (ngram_base_pos + k) * self.datum_size + document.base_offset
+                    + document.tokens_offset);
 
                 // Move on to the next anchor token location
                 if !ngram[k].contains(&token_k) {
@@ -239,6 +249,7 @@ impl _RsCaptionIndex {
     fn lookup_ngram_contains(
         &self, ngram: &Vec<TokenIdOneOf>, anchor_idx: usize, document: &Document
     ) -> bool {
+        let m = &self.data[document.file_num];
         let base_index_ofs: usize = document.base_offset + document.inv_index_offset;
         let time_int_size = self.time_int_size();
         let posting_size = self.posting_size();
@@ -259,9 +270,8 @@ impl _RsCaptionIndex {
             // Look for ngram around anchor index
             for j in 0..anchor_token_posting_count {
                 let ngram_anchor_pos = self.read_datum(
-                    base_index_ofs +
-                    (anchor_token_posting_idx + j) * posting_size +
-                    time_int_size
+                    m,
+                    base_index_ofs + (anchor_token_posting_idx + j) * posting_size + time_int_size
                 ) as usize;
 
                 if ngram_anchor_pos < anchor_idx ||
@@ -282,6 +292,7 @@ impl _RsCaptionIndex {
     fn lookup_and_load_ngrams(
         &self, ngram: &Vec<TokenIdOneOf>, anchor_idx: usize, document: &Document
     ) -> Option<Vec<Posting>> {
+        let m = &self.data[document.file_num];
         let base_index_ofs: usize = document.base_offset + document.inv_index_offset;
         let time_int_size = self.time_int_size();
         let posting_size = self.posting_size();
@@ -305,9 +316,8 @@ impl _RsCaptionIndex {
             // Look for ngram around anchor index
             for j in 0..anchor_token_posting_count {
                 let ngram_anchor_pos = self.read_datum(
-                    base_index_ofs +
-                    (anchor_token_posting_idx + j) * posting_size +
-                    time_int_size
+                    m,
+                    base_index_ofs + (anchor_token_posting_idx + j) * posting_size + time_int_size
                 ) as usize;
 
                 if ngram_anchor_pos < anchor_idx ||
@@ -320,8 +330,7 @@ impl _RsCaptionIndex {
                 if self.check_is_ngram(&ngram, anchor_idx, document, ngram_base_pos) {
                     // All other indices matched
                     let ngram_anchor_time_int = self.read_time_int(
-                        base_index_ofs +
-                        (anchor_token_posting_idx + j) * posting_size);
+                        m, base_index_ofs + (anchor_token_posting_idx + j) * posting_size);
                     let start_ms = if anchor_idx != 0 {
                         match self.lookup_time_int_by_idx(
                             document, ngram_base_pos as u32, hint_time_int_idx
@@ -555,12 +564,13 @@ impl RsCaptionIndex {
         }
         match self._internal.docs.get(&doc_id) {
             Some(d) => {
+                let m = &self._internal.data[d.file_num];
                 let min_pos = cmp::min(position, d.length);
                 let max_pos = cmp::min(position + n, d.length);
                 let mut tokens = Vec::with_capacity(max_pos - min_pos);
                 for pos in min_pos..max_pos {
                     let ofs = pos * self._internal.datum_size + d.base_offset + d.tokens_offset;
-                    tokens.push(self._internal.read_datum(ofs));
+                    tokens.push(self._internal.read_datum(m, ofs));
                 }
                 Ok(tokens)
             },
@@ -582,6 +592,7 @@ impl RsCaptionIndex {
         let time_int_size = self._internal.time_int_size();
         match self._internal.docs.get(&doc_id) {
             Some(d) => {
+                let m = &self._internal.data[d.file_num];
                 let mut locations = vec![];
                 match self._internal.lookup_time_int(d, start_ms) {
                     Some(start_idx_immut) => {
@@ -593,13 +604,14 @@ impl RsCaptionIndex {
                         let base_index_ofs = d.base_offset + d.time_index_offset;
                         for i in start_idx..(d.time_int_count as usize) {
                             let ofs = i * posting_size + base_index_ofs;
-                            let time_int = self._internal.read_time_int(ofs);
+                            let time_int = self._internal.read_time_int(m, ofs);
                             if cmp::min(end_ms, time_int.1) >= cmp::max(start_ms, time_int.0) {
                                 // Non-zero overlap
-                                let pos = self._internal.read_datum(ofs + time_int_size) as usize;
+                                let pos = self._internal.read_datum(
+                                    m, ofs + time_int_size) as usize;
                                 let next_pos: usize = if i + 1 < (d.time_int_count as usize) {
                                     self._internal.read_datum(
-                                        ofs + posting_size + time_int_size) as usize
+                                        m, ofs + posting_size + time_int_size) as usize
                                 } else {d.length};
                                 assert!(next_pos >= pos, "postions are not non-decreasing");
                                 locations.push(
@@ -624,11 +636,12 @@ impl RsCaptionIndex {
         }
         match self._internal.docs.get(&doc_id) {
             Some(d) => Ok({
+                let m = &self._internal.data[d.file_num];
                 match self._internal.lookup_time_int(d, s_to_ms(time)) {
                     Some(idx) => {
                         let ofs = d.base_offset + d.time_index_offset +
                             idx * self._internal.posting_size() + self._internal.time_int_size();
-                        self._internal.read_datum(ofs) as Position
+                        self._internal.read_datum(m, ofs) as Position
                     },
                     None => d.length as Position
                 }
@@ -638,23 +651,42 @@ impl RsCaptionIndex {
     }
 
     #[new]
-    unsafe fn __new__(obj: &PyRawObject, index_file: String, datum_size: usize,
+    unsafe fn __new__(obj: &PyRawObject, index_path: String, datum_size: usize,
                       start_time_size: usize, end_time_size: usize, debug: bool
     ) -> PyResult<()> {
-        let mmap = MmapOptions::new().map(&File::open(&index_file)?);
-        match mmap {
-            Ok(m) => {
-                let docs = parse_index(&m, datum_size, start_time_size, end_time_size, debug);
-                obj.init(RsCaptionIndex {
-                    _internal: _RsCaptionIndex {
-                        docs: docs, data: m, datum_size: datum_size,
-                        start_time_size: start_time_size, end_time_size: end_time_size
-                    },
-                    debug: debug
-                });
-                Ok(())
-            },
-            Err(s) => Err(exceptions::Exception::py_err(s.to_string()))
+        let mut index_files = vec![];
+        if metadata(index_path.clone()).unwrap().is_dir() {
+            let index_paths = read_dir(index_path.clone()).unwrap();
+            for entry in index_paths {
+                let fname = entry.unwrap().path().file_name().unwrap().to_string_lossy().into_owned();
+                let mut fpath = index_path.clone();
+                fpath.push_str("/");
+                fpath.push_str(&fname);
+                index_files.push(fpath.clone());
+            }
+        } else {
+            index_files.push(index_path.clone());
         }
+
+        let index_mmaps: Vec<Mmap> = index_files.iter().map(|index_path| {
+            MmapOptions::new().map(&File::open(&index_path).unwrap()).unwrap()
+        }).collect();
+        assert!(index_mmaps.len() == 1, "Muliple files are not supported yet");
+
+        let mut docs = BTreeMap::new();
+        for i in 0..index_mmaps.len() {
+            let chunk_docs = parse_index(
+                &index_mmaps[i], i, datum_size, start_time_size, end_time_size, debug);
+            docs.extend(chunk_docs);
+        }
+
+        obj.init(RsCaptionIndex {
+            _internal: _RsCaptionIndex {
+                docs: docs, data: index_mmaps, datum_size: datum_size,
+                start_time_size: start_time_size, end_time_size: end_time_size
+            },
+            debug: debug
+        });
+        Ok(())
     }
 }

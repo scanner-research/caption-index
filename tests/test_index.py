@@ -62,37 +62,52 @@ def test_search():
     idx_path = os.path.join(idx_dir, 'index.bin')
     documents, lexicon = _get_docs_and_lex(idx_dir)
 
+    def count_and_test(index, tokens):
+        ids = index.contains(tokens, [test_document])
+        assert len(ids) == 1
+
+        count = 0
+        (d,) = list(index.search(tokens, [test_document]))
+        assert len(d.postings) > 0
+        for l in d.postings:
+            assert l.len == len(tokens)
+            assert abs(l.end - l.start) < 10.0, 'ngram time too large'
+            count += 1
+
+            # Check that we actually found the right ngrams
+            assert [
+                lexicon.decode(t) for t in
+                index.tokens(d.id, l.idx, l.len)
+            ] == tokens
+
+        return count
+
     with captions.CaptionIndex(idx_path, lexicon, documents) as index:
         test_document = documents['cnn.srt']
+        assert count_and_test(index, ['THEY']) == 12
+        assert count_and_test(index, ['PEOPLE']) == 12
+        assert count_and_test(index, ['TO', 'THE']) == 9    # one wraps
+        assert count_and_test(index, ['GIBSON', 'GUITAR', 'DROP']) == 1
+        assert count_and_test(index, ['PUT', 'THAT', 'DOWN']) == 1
+        assert count_and_test(index, ['CLOCK', 'STRIKES']) == 2
+        assert count_and_test(index, ['>>']) == 149
+        assert count_and_test(index, ['SEE', '?']) == 1
 
-        def count_and_test(tokens):
-            ids = index.contains(tokens, [test_document])
-            assert len(ids) == 1
-
-            count = 0
-            (d,) = list(index.search(tokens, [test_document]))
-            assert len(d.postings) > 0
-            for l in d.postings:
-                assert l.len == len(tokens)
-                assert abs(l.end - l.start) < 10.0, 'ngram time too large'
-                count += 1
-
-                # Check that we actually found the right ngrams
-                assert [
-                    lexicon.decode(t) for t in
-                    index.tokens(d.id, l.idx, l.len)
-                ] == tokens
-
-            return count
-
-        assert count_and_test(['THEY']) == 12
-        assert count_and_test(['PEOPLE']) == 12
-        assert count_and_test(['TO', 'THE']) == 9    # one wraps
-        assert count_and_test(['GIBSON', 'GUITAR', 'DROP']) == 1
-        assert count_and_test(['PUT', 'THAT', 'DOWN']) == 1
-        assert count_and_test(['CLOCK', 'STRIKES']) == 2
-        assert count_and_test(['>>']) == 149
-        assert count_and_test(['SEE', '?']) == 1
+    # Make a chunked copy
+    chunked_idx_path = os.path.join(idx_dir, 'index_chunks')
+    os.makedirs(chunked_idx_path)
+    shutil.copyfile(idx_path, os.path.join(chunked_idx_path, '0.bin'))
+    with captions.CaptionIndex(chunked_idx_path, lexicon, documents) as index2:
+        test_document = documents['cnn.srt']
+        assert count_and_test(index2, ['THEY']) == 12
+        assert count_and_test(index2, ['PEOPLE']) == 12
+        assert count_and_test(index2, ['TO', 'THE']) == 9    # one wraps
+        assert count_and_test(index2, ['GIBSON', 'GUITAR', 'DROP']) == 1
+        assert count_and_test(index2, ['PUT', 'THAT', 'DOWN']) == 1
+        assert count_and_test(index2, ['CLOCK', 'STRIKES']) == 2
+        assert count_and_test(index2, ['>>']) == 149
+        assert count_and_test(index2, ['SEE', '?']) == 1
+    shutil.rmtree(chunked_idx_path)
 
 
 def test_search_position():
