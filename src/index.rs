@@ -671,7 +671,6 @@ impl RsCaptionIndex {
         let index_mmaps: Vec<Mmap> = index_files.iter().map(|index_path| {
             MmapOptions::new().map(&File::open(&index_path).unwrap()).unwrap()
         }).collect();
-        assert!(index_mmaps.len() == 1, "Muliple files are not supported yet");
 
         let mut docs = BTreeMap::new();
         for i in 0..index_mmaps.len() {
