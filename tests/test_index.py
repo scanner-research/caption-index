@@ -4,17 +4,12 @@ Build a dummy index and run tests on it.
 
 import os
 import pytest
-import sys
 import shutil
 import tempfile
 from subprocess import check_call
 
 import captions as captions
-
-
-sys.path.append(os.path.dirname(os.path.abspath(__file__)) + '/../scripts')
-
-import build
+import captions.decode as decode
 
 
 TMP_DIR = None
@@ -22,6 +17,10 @@ TEST_SUBS_SUBDIR = 'subs'
 TEST_INDEX_SUBDIR = 'index'
 TEST_DATA_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                               'test-small.tar.gz')
+
+BUILD_INDEX_SCRIPT = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    '..', 'scripts', 'build_index.py')
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -38,7 +37,10 @@ def dummy_data():
         os.makedirs(subs_dir)
         check_call(['tar', '-xzf', TEST_DATA_PATH, '-C', subs_dir])
 
-        build.main(subs_dir, idx_dir, 1)
+        # Build the index
+        check_call([
+            BUILD_INDEX_SCRIPT, subs_dir, '-o', idx_dir,
+            '--keep-tmp-files'])
         assert os.path.isdir(idx_dir)
 
     try:
@@ -48,9 +50,9 @@ def dummy_data():
         shutil.rmtree(TMP_DIR, True)
 
 
-def _get_docs_and_lex(idx_dir):
-    doc_path = os.path.join(idx_dir, 'docs.list')
-    lex_path = os.path.join(idx_dir, 'words.lex')
+def _get_docs_and_lexicon(idx_dir):
+    doc_path = os.path.join(idx_dir, 'documents.txt')
+    lex_path = os.path.join(idx_dir, 'lexicon.txt')
 
     documents = captions.Documents.load(doc_path)
     lexicon = captions.Lexicon.load(lex_path)
@@ -60,14 +62,14 @@ def _get_docs_and_lex(idx_dir):
 def test_search():
     idx_dir = os.path.join(TMP_DIR, TEST_INDEX_SUBDIR)
     idx_path = os.path.join(idx_dir, 'index.bin')
-    documents, lexicon = _get_docs_and_lex(idx_dir)
+    documents, lexicon = _get_docs_and_lexicon(idx_dir)
 
-    def count_and_test(index, tokens):
-        ids = index.contains(tokens, [test_document])
+    def count_and_test(index, document, tokens):
+        ids = index.contains(tokens, [document])
         assert len(ids) == 1
 
         count = 0
-        (d,) = list(index.search(tokens, [test_document]))
+        (d,) = list(index.search(tokens, [document]))
         assert len(d.postings) > 0
         for l in d.postings:
             assert l.len == len(tokens)
@@ -82,38 +84,37 @@ def test_search():
 
         return count
 
+    test_document = documents['cnn.srt']
+
     with captions.CaptionIndex(idx_path, lexicon, documents) as index:
-        test_document = documents['cnn.srt']
-        assert count_and_test(index, ['THEY']) == 12
-        assert count_and_test(index, ['PEOPLE']) == 12
-        assert count_and_test(index, ['TO', 'THE']) == 9    # one wraps
-        assert count_and_test(index, ['GIBSON', 'GUITAR', 'DROP']) == 1
-        assert count_and_test(index, ['PUT', 'THAT', 'DOWN']) == 1
-        assert count_and_test(index, ['CLOCK', 'STRIKES']) == 2
-        assert count_and_test(index, ['>>']) == 149
-        assert count_and_test(index, ['SEE', '?']) == 1
+        assert count_and_test(index, test_document, ['THEY']) == 12
+        assert count_and_test(index, test_document, ['PEOPLE']) == 12
+        assert count_and_test(index, test_document, ['TO', 'THE']) == 9    # one wraps
+        assert count_and_test(index, test_document, ['GIBSON', 'GUITAR', 'DROP']) == 1
+        assert count_and_test(index, test_document, ['PUT', 'THAT', 'DOWN']) == 1
+        assert count_and_test(index, test_document, ['CLOCK', 'STRIKES']) == 2
+        assert count_and_test(index, test_document, ['>>']) == 149
+        assert count_and_test(index, test_document, ['SEE', '?']) == 1
 
     # Make a chunked copy
-    chunked_idx_path = os.path.join(idx_dir, 'index_chunks')
-    os.makedirs(chunked_idx_path)
-    shutil.copyfile(idx_path, os.path.join(chunked_idx_path, '0.bin'))
+    chunked_idx_path = os.path.join(idx_dir, 'index.tmp')
+    assert len(os.listdir(chunked_idx_path)) > 0
     with captions.CaptionIndex(chunked_idx_path, lexicon, documents) as index2:
-        test_document = documents['cnn.srt']
-        assert count_and_test(index2, ['THEY']) == 12
-        assert count_and_test(index2, ['PEOPLE']) == 12
-        assert count_and_test(index2, ['TO', 'THE']) == 9    # one wraps
-        assert count_and_test(index2, ['GIBSON', 'GUITAR', 'DROP']) == 1
-        assert count_and_test(index2, ['PUT', 'THAT', 'DOWN']) == 1
-        assert count_and_test(index2, ['CLOCK', 'STRIKES']) == 2
-        assert count_and_test(index2, ['>>']) == 149
-        assert count_and_test(index2, ['SEE', '?']) == 1
+        assert count_and_test(index2, test_document, ['THEY']) == 12
+        assert count_and_test(index2, test_document, ['PEOPLE']) == 12
+        assert count_and_test(index2, test_document, ['TO', 'THE']) == 9    # one wraps
+        assert count_and_test(index2, test_document, ['GIBSON', 'GUITAR', 'DROP']) == 1
+        assert count_and_test(index2, test_document, ['PUT', 'THAT', 'DOWN']) == 1
+        assert count_and_test(index2, test_document, ['CLOCK', 'STRIKES']) == 2
+        assert count_and_test(index2, test_document, ['>>']) == 149
+        assert count_and_test(index2, test_document, ['SEE', '?']) == 1
     shutil.rmtree(chunked_idx_path)
 
 
 def test_search_position():
     idx_dir = os.path.join(TMP_DIR, TEST_INDEX_SUBDIR)
     idx_path = os.path.join(idx_dir, 'index.bin')
-    documents, lexicon = _get_docs_and_lex(idx_dir)
+    documents, lexicon = _get_docs_and_lexicon(idx_dir)
 
     with captions.CaptionIndex(idx_path, lexicon, documents) as index:
         test_document = documents['test.srt']
@@ -134,7 +135,7 @@ def _is_close(a, b):
 def test_search_intervals():
     idx_dir = os.path.join(TMP_DIR, TEST_INDEX_SUBDIR)
     idx_path = os.path.join(idx_dir, 'index.bin')
-    documents, lexicon = _get_docs_and_lex(idx_dir)
+    documents, lexicon = _get_docs_and_lexicon(idx_dir)
 
     with captions.CaptionIndex(idx_path, lexicon, documents) as index:
         test_document = documents['test.srt']
@@ -161,3 +162,12 @@ def test_search_intervals():
             (p,) = d.postings
             assert _is_close(p.start, i * 5.), trigram
             assert _is_close(p.end, (i + 3) * 5.), trigram
+
+
+def test_decode():
+    idx_dir = os.path.join(TMP_DIR, TEST_INDEX_SUBDIR)
+    idx_path = os.path.join(idx_dir, 'index.bin')
+    documents, lexicon = _get_docs_and_lexicon(idx_dir)
+    with captions.CaptionIndex(idx_path, lexicon, documents) as index:
+        print(decode.get_vtt(lexicon, index, 1))
+        print(decode.get_srt(lexicon, index, 1))

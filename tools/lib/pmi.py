@@ -9,10 +9,10 @@ from collections import deque, Counter
 from multiprocessing import Pool
 from typing import Dict, List, Tuple, Iterable
 
-from .index import Lexicon, CaptionIndex
-from .ngram import NgramFrequency
-from .query import Query
-from .util import window, PostingUtil
+from captions import Lexicon, CaptionIndex
+from captions.ngram import NgramFrequency
+from captions.query import Query
+from captions.util import window, PostingUtil
 
 VERBOSE = False
 DEFAULT_WORKERS = os.cpu_count()

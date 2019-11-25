@@ -100,9 +100,9 @@ def run_search(query_str, documents, lexicon, index, context_size, silent):
 
 
 def main(index_dir, query, silent, context_size):
-    doc_path = os.path.join(index_dir, 'docs.list')
-    lex_path = os.path.join(index_dir, 'words.lex')
     idx_path = os.path.join(index_dir, 'index.bin')
+    doc_path = os.path.join(index_dir, 'documents.txt')
+    lex_path = os.path.join(index_dir, 'lexicon.txt')
 
     documents = Documents.load(doc_path)
     lexicon = Lexicon.load(lex_path)

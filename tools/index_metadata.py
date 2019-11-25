@@ -2,6 +2,9 @@
 
 """
 Build a metadata index containing part-of-speech tags.
+
+You will need spacy:
+    python3 -m spacy download en
 """
 
 import argparse
@@ -79,9 +82,9 @@ def write_doc_metadata(d, tokens, out_file):
 
 
 def main(index_dir, lowercase):
-    doc_path = os.path.join(index_dir, 'docs.list')
     index_path = os.path.join(index_dir, 'index.bin')
-    lex_path = os.path.join(index_dir, 'words.lex')
+    doc_path = os.path.join(index_dir, 'documents.txt')
+    lex_path = os.path.join(index_dir, 'lexicon.txt')
     meta_path = os.path.join(index_dir, 'meta.bin')
 
     if os.path.exists(meta_path):

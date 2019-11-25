@@ -655,17 +655,22 @@ impl RsCaptionIndex {
                       start_time_size: usize, end_time_size: usize, debug: bool
     ) -> PyResult<()> {
         let mut index_files = vec![];
-        if metadata(index_path.clone()).unwrap().is_dir() {
-            let index_paths = read_dir(index_path.clone()).unwrap();
-            for entry in index_paths {
-                let fname = entry.unwrap().path().file_name().unwrap().to_string_lossy().into_owned();
-                let mut fpath = index_path.clone();
-                fpath.push_str("/");
-                fpath.push_str(&fname);
-                index_files.push(fpath.clone());
-            }
-        } else {
-            index_files.push(index_path.clone());
+        match metadata(index_path.clone()) {
+            Ok(meta) => {
+                if meta.is_dir() {
+                    let index_paths = read_dir(index_path.clone()).unwrap();
+                    for entry in index_paths {
+                        let fname = entry.unwrap().path().file_name().unwrap().to_string_lossy().into_owned();
+                        let mut fpath = index_path.clone();
+                        fpath.push_str("/");
+                        fpath.push_str(&fname);
+                        index_files.push(fpath.clone());
+                    }
+                } else {
+                    index_files.push(index_path.clone());
+                }
+            },
+            Err(_e) => return Err(exceptions::OSError::py_err("Unable to stat index files"))
         }
 
         let index_mmaps: Vec<Mmap> = index_files.iter().map(|index_path| {

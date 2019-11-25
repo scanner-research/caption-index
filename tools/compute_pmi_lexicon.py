@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 """
-Find lexicons of words around phrases
+Find lexicons of words around phrases using PMI
 """
 
 import argparse
@@ -12,7 +12,8 @@ import traceback
 
 from captions import Lexicon, Documents, CaptionIndex, default_tokenizer
 from captions.ngram import NgramFrequency
-import captions.pmi as pmi
+
+import lib.pmi as pmi
 
 
 DEFAULT_WINDOW = 30
@@ -81,8 +82,8 @@ def run_search(query, lexicon, index, ngram_frequency, n,
 
 
 def main(index_dir, query, n, window_size, result_len):
-    doc_path = os.path.join(index_dir, 'docs.list')
-    lex_path = os.path.join(index_dir, 'words.lex')
+    doc_path = os.path.join(index_dir, 'documents.txt')
+    lex_path = os.path.join(index_dir, 'lexicon.txt')
     idx_path = os.path.join(index_dir, 'index.bin')
     ngram_path = os.path.join(index_dir, 'ngrams.bin')
 

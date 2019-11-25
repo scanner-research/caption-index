@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 """
-Count ngrams in all of the documents
+Count ngrams in all of the documents and writes
 """
 
 import argparse
@@ -93,9 +93,9 @@ def single_pass_count_ngrams(n, limit, workers, batch_size=1000):
 
 
 def main(index_dir, n, min_count, workers, limit):
-    doc_path = os.path.join(index_dir, 'docs.list')
     index_path = os.path.join(index_dir, 'index.bin')
-    lex_path = os.path.join(index_dir, 'words.lex')
+    doc_path = os.path.join(index_dir, 'documents.txt')
+    lex_path = os.path.join(index_dir, 'lexicon.txt')
     out_path = os.path.join(index_dir, 'ngrams.bin')
 
     if os.path.exists(out_path):

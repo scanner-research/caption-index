@@ -17,28 +17,45 @@ Run `python3 setup.py install --user`.
 
 #### Indexing your files
 
-Run `scripts/build.py` and point it to the directory containing your subtitle
-files to build an index. This can take some time and require significant
-computation and memory resources.
+Run `scripts/build_index.py` and point it to the directory containing your
+subtitle files to build an index. This can take some time and require
+significant computation and memory resources if there are many files
+(i.e., hundreds of thousands).
+
+After the indexer has run, there will be three files in the index directory.
+These are:
+  - `documents.txt`
+  - `lexicon.txt`
+  - `index.bin`
+
+Note that if you set ran the indexer with the `--chunk-size` set, then
+`index.bin` will be a directory containing the index files.
+
+#### Updating an index
+
+Sometimes, we may need to index additional documents after we first built our
+index. To do this, run `scripts/update_index.py`. This will use the same
+lexicon as the original index (to update the lexicon, you must rebuild the
+index from scratch).
 
 #### Using your index
 
-The `scripts` directory contains examples for how to use the various indices
-that were built by `scripts/build.py`.
+The `tools` directory contains examples for how to use the various indices
+that were built by `scripts/build_index.py`.
 
-- `scripts/search.py` demonstrates n-gram and topic search in a command line
+- `tools/search.py` demonstrates n-gram and topic search in a command line
   application.
 
-- `scripts/scan.py` performs a scan over all of the tokens in all documents.
+- `tools/scan.py` performs a scan over all of the tokens in all documents.
 
-- `scripts/build_metadata.py` produces part-of-speech metadata and stores it
-  in an indexable format.
+- `tools/index_metadata.py` produces part-of-speech metadata and stores it
+  in a searchable format.
 
-- `scripts/build_ngrams.py` produces ngram frequencies across the entire
-  dataset.
+- `tools/index_ngram_counts.py` produces n-gram frequencies across the entire
+  data set.
 
-- `scripts/lexicon.py` builds topic lexicons around ngrams using a PMI topic
-  model.
+- `tools/compute_pmi_lexicon.py` builds topic lexicons around n-grams using a
+  PMI topic model.
 
 ## Tests
 

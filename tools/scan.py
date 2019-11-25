@@ -40,9 +40,9 @@ def count_tokens(i):
 
 
 def main(index_dir, workers, limit):
-    doc_path = os.path.join(index_dir, 'docs.list')
     index_path = os.path.join(index_dir, 'index.bin')
-    lex_path = os.path.join(index_dir, 'words.lex')
+    doc_path = os.path.join(index_dir, 'documents.txt')
+    lex_path = os.path.join(index_dir, 'lexicon.txt')
 
     documents = Documents.load(doc_path)
     lexicon = Lexicon.load(lex_path)
