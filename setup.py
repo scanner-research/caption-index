@@ -20,6 +20,7 @@ install_requires = [
     'numpy>=1.15.4',
     'parsimonious>=0.8.1',
     'pysrt>=1.1.1',
+    'pyvtt>=0.0.2',
     'pytest>=4.0.1',
     'PyYAML>=3.13',
     'spacy>=2.0.18',

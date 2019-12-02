@@ -1,8 +1,11 @@
+import re
 import pysrt
+import pyvtt
 import traceback
+from html.parser import HTMLParser
 from collections import defaultdict, deque, Counter
 from io import BytesIO
-from typing import Dict, List, Tuple
+from typing import Callable, Dict, List, Tuple, NamedTuple
 
 from .index import Lexicon, BinaryFormat
 from .tokenize import Tokenizer, default_tokenizer
@@ -12,15 +15,45 @@ def __millis_to_seconds(t: int) -> float:
     return t / 1000
 
 
-def __load_srt(doc_path: str):
+class CaptionLine(NamedTuple):
+    start: int
+    end: int
+    text: str
+
+
+class CaptionParseError(Exception):
+    pass
+
+
+def __load_srt(doc_path: str) -> List[CaptionLine]:
     try:
         subs = pysrt.open(doc_path)
     except:
         try:
             subs = pysrt.open(doc_path, encoding='iso-8859-1')
         except:
-            raise Exception('Cannot parse {}'.format(doc_path))
-    return subs
+            raise CaptionParseError('Cannot parse {}'.format(doc_path))
+    return [CaptionLine(s.start.ordinal, s.end.ordinal, s.text) for s in subs]
+
+
+def __strip_ml(s: str) -> str:
+    return HTMLParser().unescape(re.sub('<[^<]+?>', '', s))
+
+
+def __load_vtt(doc_path: str) -> List[CaptionLine]:
+    try:
+        subs = pyvtt.open(doc_path)
+    except:
+        raise CaptionParseError('Cannot parse {}'.format(doc_path))
+    return [CaptionLine(s.start.ordinal, s.end.ordinal, __strip_ml(s.text))
+            for s in subs]
+
+
+def load_file(doc_path: str) -> List[CaptionLine]:
+    if doc_path.endswith('.vtt'):
+        return __load_vtt(doc_path)
+    else:
+        return __load_srt(doc_path)
 
 
 def get_document_word_counts(
@@ -30,7 +63,7 @@ def get_document_word_counts(
 ) -> Counter:
     words = Counter()
     try:
-        subs = __load_srt(doc_path)
+        subs = load_file(doc_path)
     except Exception as e:
         print(e)
         return words
@@ -47,10 +80,10 @@ def __read_and_index_document(
     doc_inv_index = defaultdict(deque)  # token_id -> [postings]
     doc_lines = deque()                 # [(position, start, end, [tokens])]
     try:
-        subs = __load_srt(doc_path)
+        subs = load_file(doc_path)
         doc_position = 0
         for s in subs:
-            start, end = s.start.ordinal, s.end.ordinal
+            start, end = s.start, s.end
             if start > end:
                 print('Warning: start time > end time ({} > {})'.format(
                       start, end))

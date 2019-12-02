@@ -178,8 +178,10 @@ def main(
     # Build inverted index chunks and reencode the documents
     tmp_dir = os.path.join(out_dir, 'index.tmp')
     index_path = os.path.join(out_dir, 'index.bin')
-    if os.path.exists(index_path):
+    if os.path.isdir(index_path):
         shutil.rmtree(index_path)
+    elif os.path.isfile(index_path):
+        os.remove(index_path)
     os.makedirs(tmp_dir)
     try:
         index_all_docs(doc_dir, documents, lexicon, index_path, tmp_dir,
