@@ -38,10 +38,6 @@ def get_args():
                         DEFAULT_PARALLELISM))
     p.add_argument('--chunk-size', dest='chunk_size', type=int,
                    help='Break the index into chunks of n documents')
-    p.add_argument('--ext', dest='file_ext',
-                   default=DEFAULT_SOURCE_FILE_EXT,
-                   help='Subtitle file extension. Default: {}'.format(
-                        DEFAULT_SOURCE_FILE_EXT))
     return p.parse_args()
 
 
@@ -79,8 +75,7 @@ def index_new_docs(
 def main(
     new_doc_dir: str, index_dir: str,
     parallelism: int = DEFAULT_PARALLELISM,
-    chunk_size: Optional[int] = None,
-    file_ext: str = DEFAULT_SOURCE_FILE_EXT
+    chunk_size: Optional[int] = None
 ):
     assert chunk_size is None or chunk_size > 0
     assert parallelism > 0
@@ -93,7 +88,7 @@ def main(
 
     documents = Documents.load(doc_path)
 
-    new_doc_names = list_docs(new_doc_dir, file_ext)
+    new_doc_names = list_docs(new_doc_dir)
     assert len(new_doc_names) > 0
     for new_doc in new_doc_names:
         if new_doc in documents:

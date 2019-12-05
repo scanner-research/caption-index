@@ -41,10 +41,6 @@ def get_args():
                         DEFAULT_PARALLELISM))
     p.add_argument('--chunk-size', dest='chunk_size', type=int,
                    help='Break the index into chunks of n documents')
-    p.add_argument('--ext', dest='file_ext',
-                   default=DEFAULT_SOURCE_FILE_EXT,
-                   help='Subtitle file extension. Default: {}'.format(
-                        DEFAULT_SOURCE_FILE_EXT))
     p.add_argument('--keep-tmp-files', dest='keep_tmp_files',
                    action='store_true', help='Keeps per document index files')
     return p.parse_args()
@@ -149,14 +145,13 @@ def main(
     doc_dir: str, out_dir: str,
     parallelism: int = DEFAULT_PARALLELISM,
     chunk_size: Optional[int] = None,
-    file_ext: str = DEFAULT_SOURCE_FILE_EXT,
     keep_tmp_files: bool = False
 ):
     assert chunk_size is None or chunk_size > 0
     assert parallelism > 0
 
     # Load document names
-    doc_names = list(sorted(list_docs(doc_dir, file_ext)))
+    doc_names = list(sorted(list_docs(doc_dir)))
 
     if not os.path.isdir(out_dir):
         os.makedirs(out_dir)

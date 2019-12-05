@@ -5,14 +5,13 @@ from typing import List
 from captions import BinaryFormat
 
 DEFAULT_PARALLELISM = os.cpu_count()
-DEFAULT_SOURCE_FILE_EXT = 'srt'
 
 BINARY_FORMAT = BinaryFormat.default()
 MAX_WORD_LEN = 20
 
 
-def list_docs(dir: str, ext: str) -> List[str]:
-    return [f for f in os.listdir(dir) if f.endswith(ext)]
+def list_docs(dir: str) -> List[str]:
+    return os.listdir(dir)
 
 
 def merge_index_files(
