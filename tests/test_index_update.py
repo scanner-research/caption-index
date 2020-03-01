@@ -40,11 +40,11 @@ def test_update_index():
     check_call(['tar', '-xzf', TEST_DATA_PATH, '-C', subs_dir])
 
     # Build an index
-    check_call([BUILD_INDEX_SCRIPT, subs_dir, '-o', idx_dir])
+    check_call([BUILD_INDEX_SCRIPT, '-d', subs_dir, '-o', idx_dir])
 
     # Update the index (should fail due to duplicate files)
     try:
-        check_call([UPDATE_INDEX_SCRIPT, subs_dir, idx_dir])
+        check_call([UPDATE_INDEX_SCRIPT, '-d', subs_dir, idx_dir])
         raise Exception('Uh oh, an exception should have been thrown...')
     except:
         pass
@@ -54,7 +54,7 @@ def test_update_index():
         src_path = os.path.join(subs_dir, fname)
         dst_path = os.path.join(subs_dir, 'copy::' + fname)
         shutil.move(src_path, dst_path)
-    check_call([UPDATE_INDEX_SCRIPT, subs_dir, idx_dir])
+    check_call([UPDATE_INDEX_SCRIPT, '-d', subs_dir, idx_dir])
     assert os.path.isfile(os.path.join(idx_dir, 'documents.txt.old'))
 
     # Test the new index

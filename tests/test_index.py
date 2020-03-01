@@ -39,7 +39,7 @@ def dummy_data():
 
         # Build the index
         check_call([
-            BUILD_INDEX_SCRIPT, subs_dir, '-o', idx_dir,
+            BUILD_INDEX_SCRIPT, '-d', subs_dir, '-o', idx_dir,
             '--keep-tmp-files'])
         assert os.path.isdir(idx_dir)
 
