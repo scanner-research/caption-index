@@ -10,6 +10,8 @@ DEFAULT_PARALLELISM = os.cpu_count()
 BINARY_FORMAT = BinaryFormat.default()
 MAX_WORD_LEN = 20
 
+STDIN_DELIM = '\t'
+
 
 class DocumentToIndex(NamedTuple):
     name: str
@@ -21,12 +23,12 @@ def list_docs(dir: str) -> List[DocumentToIndex]:
 
 
 def read_docs_from_stdin() -> List[DocumentToIndex]:
-    # Read in list of "name,path" pairs from stdin
+    # Read in list of "name path" pairs from stdin
     result = []
     for line in sys.stdin:
         line = line.strip()
         if line != '':
-            name, path = [t.strip() for t in line.split(',', 1)]
+            name, path = [t.strip() for t in line.split(STDIN_DELIM, 1)]
             result.append(DocumentToIndex(name, path))
     return result
 
