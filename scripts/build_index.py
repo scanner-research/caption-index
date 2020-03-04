@@ -20,6 +20,7 @@ from typing import Dict, List, Optional
 from captions import Lexicon, Documents
 from captions.indexer import index_document, get_document_word_counts
 from captions.tokenize import AlignmentTokenizer
+
 from lib.common import *
 
 DEFAULT_OUT_DIR = 'out'
@@ -73,7 +74,7 @@ def get_word_counts(docs_to_index: List[DocumentToIndex], parallelism: int):
 
 def index_single_doc(doc_id: int, doc_path: str, out_path: str):
     index_document(doc_id, doc_path, WORKER_LEXICON, out_path,
-                   tokenizer=AlignmentTokenizer)
+                   tokenizer=AlignmentTokenizer())
 
 
 def index_all_docs(
