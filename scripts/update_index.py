@@ -18,6 +18,7 @@ from typing import Dict, List, Optional
 
 from captions import Lexicon, Documents
 from captions.indexer import index_document
+from captions.tokenize import AlignmentTokenizer
 
 from lib.common import *
 
@@ -28,10 +29,10 @@ WORKER_LEXICON = None
 
 def get_args():
     p = argparse.ArgumentParser()
-    p.add_argument('new_doc_dir', type=str,
-                   help='Directory containing transcripts')
     p.add_argument('index_dir', type=str,
-                   help='Directory containing index')
+                   help='Directory containing existing index')
+    p.add_argument('-d', '--new-doc-dir', type=str,
+                   help='Directory containing captions. If not passed, read from stdin.')
     p.add_argument('-j', dest='parallelism', type=int,
                    default=DEFAULT_PARALLELISM,
                    help='Number of CPU cores to use. Default: {}'.format(
@@ -42,14 +43,17 @@ def get_args():
 
 
 def index_single_doc(doc_id: int, doc_path: str, out_path: str):
-    index_document(doc_id, doc_path, WORKER_LEXICON, out_path)
+    index_document(doc_id, doc_path, WORKER_LEXICON, out_path,
+                   tokenizer=AlignmentTokenizer())
 
 
 def index_new_docs(
-    doc_dir: str, new_documents: Documents, out_dir: str,
-    chunk_size: Optional[int], parallelism: int
+    new_docs_to_index: List[DocumentToIndex], new_documents: Documents,
+    out_dir: str, chunk_size: Optional[int], parallelism: int
 ):
     """Builds inverted indexes and reencode documents in binary"""
+    assert len(new_docs_to_index) == len(new_documents)
+
     with tqdm(total=len(new_documents), desc='Building indexes') as pbar, \
             Pool(processes=parallelism) as pool:
 
@@ -57,12 +61,13 @@ def index_new_docs(
             pbar.update(1)
 
         results = deque()
-        for doc in new_documents:
-            doc_path = os.path.join(doc_dir, doc.name)
+        for doc_to_index, doc in zip(new_docs_to_index, new_documents):
+            assert doc_to_index.name == doc.name
             doc_out_path = os.path.join(out_dir, str(doc.id))
             results.append((
                 pool.apply_async(
-                    index_single_doc, (doc.id, doc_path, doc_out_path),
+                    index_single_doc,
+                    (doc.id, doc_to_index.path, doc_out_path),
                     callback=progress),
                 doc_out_path))
 
@@ -73,7 +78,7 @@ def index_new_docs(
 
 
 def main(
-    new_doc_dir: str, index_dir: str,
+    index_dir: str, new_doc_dir: Optional[str],
     parallelism: int = DEFAULT_PARALLELISM,
     chunk_size: Optional[int] = None
 ):
@@ -88,15 +93,19 @@ def main(
 
     documents = Documents.load(doc_path)
 
-    new_doc_names = list_docs(new_doc_dir)
-    assert len(new_doc_names) > 0
-    for new_doc in new_doc_names:
-        if new_doc in documents:
+    if new_doc_dir:
+        new_docs_to_index = list_docs(new_doc_dir)
+    else:
+        new_docs_to_index = read_docs_from_stdin()
+
+    assert len(new_docs_to_index) > 0
+    for new_doc in new_docs_to_index:
+        if new_doc.name in documents:
             raise Exception('{} is already indexed! Aborting.'.format(new_doc))
 
     base_doc_id = len(documents)
-    new_documents = [Documents.Document(id=i + base_doc_id, name=d)
-                     for i, d in enumerate(new_doc_names)]
+    new_documents = [Documents.Document(id=i + base_doc_id, name=d.name)
+                     for i, d in enumerate(new_docs_to_index)]
 
     # Index the new docyments
     tmp_dir = os.path.join(index_dir, 'update-index.tmp')
@@ -104,9 +113,9 @@ def main(
         shutil.rmtree(tmp_dir)
     os.makedirs(tmp_dir)
     new_doc_index_paths = index_new_docs(
-        new_doc_dir, new_documents, tmp_dir, chunk_size, parallelism)
+        new_docs_to_index, new_documents, tmp_dir, chunk_size, parallelism)
 
-    # Convert to a dirctory
+    # Convert existing index.bin to a dirctory if needed
     if os.path.isfile(index_path):
         tmp_index_path = index_path + '.tmp'
         shutil.move(index_path, tmp_index_path)

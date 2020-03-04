@@ -50,7 +50,7 @@ def dummy_data():
         check_call(['tar', '-xzf', TEST_DATA_PATH, '-C', subs_dir])
 
         # Build the index
-        check_call([BUILD_INDEX_SCRIPT, subs_dir, '-o', idx_dir])
+        check_call([BUILD_INDEX_SCRIPT, '-d', subs_dir, '-o', idx_dir])
         assert os.path.isdir(idx_dir)
 
     try:

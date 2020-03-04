@@ -1,6 +1,7 @@
 import os
+import sys
 from subprocess import check_call
-from typing import List
+from typing import List, NamedTuple
 
 from captions import BinaryFormat
 
@@ -9,9 +10,27 @@ DEFAULT_PARALLELISM = os.cpu_count()
 BINARY_FORMAT = BinaryFormat.default()
 MAX_WORD_LEN = 20
 
+STDIN_DELIM = '\t'
 
-def list_docs(dir: str) -> List[str]:
-    return os.listdir(dir)
+
+class DocumentToIndex(NamedTuple):
+    name: str
+    path: str
+
+
+def list_docs(dir: str) -> List[DocumentToIndex]:
+    return [DocumentToIndex(d, os.path.join(dir, d)) for d in os.listdir(dir)]
+
+
+def read_docs_from_stdin() -> List[DocumentToIndex]:
+    # Read in list of "name path" pairs from stdin
+    result = []
+    for line in sys.stdin:
+        line = line.strip()
+        if line != '':
+            name, path = [t.strip() for t in line.split(STDIN_DELIM, 1)]
+            result.append(DocumentToIndex(name, path))
+    return result
 
 
 def merge_index_files(
