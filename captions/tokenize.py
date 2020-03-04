@@ -49,6 +49,16 @@ class BasicTokenizer(Tokenizer):
                 result.append(remainder)
         return result
 
+    
+class AlignmentTokenizer(Tokenizer):
+    def __init__(self):
+        self._tokenizer = default_tokenizer()
+        
+    def tokens(self, t):
+        if t[0] == '{' and t[-1] == '}':
+            t = t[1:-1]
+        return self._tokenizer.tokens(t)
+
 
 _DEFAULT_TOKENIZER = None
 
