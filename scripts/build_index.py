@@ -12,13 +12,13 @@ This will produce:
 import argparse
 import os
 import shutil
-from collections import deque, Counter
+from collections import deque
 from multiprocessing import Pool
 from tqdm import tqdm
 from typing import Dict, List, Optional
 
 from captions import Lexicon, Documents
-from captions.indexer import index_document, get_document_word_counts
+from captions.indexer import index_document
 from captions.tokenize import AlignmentTokenizer
 
 from lib.common import *
@@ -45,31 +45,6 @@ def get_args():
     p.add_argument('--keep-tmp-files', dest='keep_tmp_files',
                    action='store_true', help='Keeps per document index files')
     return p.parse_args()
-
-
-def get_doc_word_counts(doc_path: str) -> Counter:
-    return get_document_word_counts(doc_path, max_word_len=MAX_WORD_LEN)
-
-
-def get_word_counts(docs_to_index: List[DocumentToIndex], parallelism: int):
-    words = Counter()
-    with tqdm(total=len(docs_to_index), desc='Building lexicon') as pbar, \
-            Pool(processes=parallelism) as pool:
-
-        def collect(result):
-            pbar.update(1)
-
-        async_results = deque()
-        for d in docs_to_index:
-            async_results.append(pool.apply_async(
-                get_doc_word_counts, (d.path,), callback=collect))
-
-        # Forces exceptions to be rethrown
-        for a in async_results:
-            words.update(a.get())
-
-    print('Lexicon size: {}'.format(len(words)))
-    return words
 
 
 def index_single_doc(doc_id: int, doc_path: str, out_path: str):

@@ -1,9 +1,14 @@
+from collections import Counter, deque
+from multiprocessing import Pool
 import os
 import sys
 from subprocess import check_call
 from typing import List, NamedTuple
 
+from tqdm import tqdm
+
 from captions import BinaryFormat
+from captions.indexer import get_document_word_counts
 
 DEFAULT_PARALLELISM = os.cpu_count()
 
@@ -45,3 +50,29 @@ def merge_index_files(
             if not keep_tmp_files:
                 for p in batch_doc_index_paths:
                     os.remove(p)
+
+
+def get_doc_word_counts(doc_path: str) -> Counter:
+    return get_document_word_counts(doc_path, max_word_len=MAX_WORD_LEN)
+
+
+def get_word_counts(docs_to_index: List[DocumentToIndex], parallelism: int):
+    words = Counter()
+    with tqdm(total=len(docs_to_index), desc='Building lexicon') as pbar, \
+            Pool(processes=parallelism) as pool:
+
+        def collect(result):
+            pbar.update(1)
+
+        async_results = deque()
+        for d in docs_to_index:
+            async_results.append(pool.apply_async(
+                get_doc_word_counts, (d.path,), callback=collect))
+
+        # Forces exceptions to be rethrown
+        for a in async_results:
+            words.update(a.get())
+
+    print('Lexicon size: {}'.format(len(words)))
+    return words
+

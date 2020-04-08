@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 """
-Update an existig index
+Update an existing index
 
 This will produce:
  - an updated document list
@@ -88,8 +88,7 @@ def main(
     lex_path = os.path.join(index_dir, 'lexicon.txt')
     index_path = os.path.join(index_dir, 'index.bin')
 
-    global WORKER_LEXICON
-    WORKER_LEXICON = Lexicon.load(lex_path)
+    old_lexicon = Lexicon.load(lex_path)
 
     documents = Documents.load(doc_path)
 
@@ -97,6 +96,22 @@ def main(
         new_docs_to_index = list_docs(new_doc_dir)
     else:
         new_docs_to_index = read_docs_from_stdin()
+
+    # Update lexicon
+    new_word_counts = get_word_counts(new_docs_to_index, parallelism)
+    lexicon_words = [
+        Lexicon.Word(w.id, w.token, w.count + new_word_counts[w.token] \
+                                 if w.token in new_word_counts else w.count)
+        for w in old_lexicon
+    ]
+    for w in new_word_counts:
+        if w not in old_lexicon:
+            lexicon_words.append(
+                Lexicon.Word(len(lexicon_words), w, new_word_counts[w])
+            )
+
+    global WORKER_LEXICON
+    WORKER_LEXICON = Lexicon(lexicon_words)
 
     assert len(new_docs_to_index) > 0
     for new_doc in new_docs_to_index:
@@ -107,7 +122,7 @@ def main(
     new_documents = [Documents.Document(id=i + base_doc_id, name=d.name)
                      for i, d in enumerate(new_docs_to_index)]
 
-    # Index the new docyments
+    # Index the new documents
     tmp_dir = os.path.join(index_dir, 'update-index.tmp')
     if os.path.exists(tmp_dir):
         shutil.rmtree(tmp_dir)
@@ -151,6 +166,11 @@ def main(
     all_documents = [d for d in documents]
     all_documents.extend(new_documents)
     Documents(all_documents).store(doc_path)
+
+    # Write out the new lexicon
+    shutil.move(lex_path, lex_path + '.old')
+    WORKER_LEXICON.store(lex_path)
+
     print('Done!')
 
 
