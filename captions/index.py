@@ -124,8 +124,8 @@ class Lexicon(object):
         for w in self._words:
             if prev_w:
                 assert w.id > prev_w.id, 'Bad lexicon, not sorted by id'
-                assert w.token > prev_w.token, \
-                    'Bad lexicon, not sorted by token'
+                #assert w.token > prev_w.token, \
+                #    'Bad lexicon, not sorted by token'
             prev_w = w
 
         with open(path, 'w') as f:
