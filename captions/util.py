@@ -100,6 +100,22 @@ class PostingUtil(object):
                 ) for p in postings]
 
     @staticmethod
+    def to_fixed_length(
+        postings: Iterable[CaptionIndex.Posting], length: Number,
+        duration: Number
+    ) -> List[CaptionIndex.Posting]:
+        """Dilate start and end times"""
+        result = []
+        half_length = length / 2
+        for p in postings:
+            mid = (p.start + p.end) / 2
+            result.append(p._replace(
+                start=max(mid - half_length, 0),
+                end=min(mid + half_length, duration)
+            ))
+        return result
+
+    @staticmethod
     def union(
         postings_lists: List[Iterable[CaptionIndex.Posting]],
         use_time: bool = True
