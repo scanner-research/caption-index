@@ -49,6 +49,10 @@ def test_update_index():
     except:
         pass
 
+    # Update the index (should do nothing since all of them are duplicates)
+    check_call([UPDATE_INDEX_SCRIPT, '--skip-existing-names', '-d', subs_dir,
+                idx_dir])
+
     # Update the index
     for fname in os.listdir(subs_dir):
         src_path = os.path.join(subs_dir, fname)
@@ -81,7 +85,7 @@ def test_update_index():
     documents, lexicon = _get_docs_and_lexicon(idx_dir)
     idx_path = os.path.join(idx_dir, 'index.bin')
     assert os.path.isdir(idx_path)
-    assert len(os.listdir(idx_path)) == 2
+    assert len(os.listdir(idx_path)) == 2, os.listdir(idx_path)
 
     test_document = documents['copy::cnn.srt']
     with captions.CaptionIndex(idx_path, lexicon, documents) as index:

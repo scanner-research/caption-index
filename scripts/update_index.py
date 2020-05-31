@@ -39,6 +39,8 @@ def get_args():
                         DEFAULT_PARALLELISM))
     p.add_argument('--chunk-size', dest='chunk_size', type=int,
                    help='Break the index into chunks of n documents')
+    p.add_argument('--skip-existing-names', action='store_true',
+                   help='Skip documents that are already indexed')
     return p.parse_args()
 
 
@@ -80,7 +82,8 @@ def index_new_docs(
 def main(
     index_dir: str, new_doc_dir: Optional[str],
     parallelism: int = DEFAULT_PARALLELISM,
-    chunk_size: Optional[int] = None
+    chunk_size: Optional[int] = None,
+    skip_existing_names: bool = False
 ):
     assert chunk_size is None or chunk_size > 0
     assert parallelism > 0
@@ -97,6 +100,21 @@ def main(
     else:
         new_docs_to_index = read_docs_from_stdin()
 
+    assert len(new_docs_to_index) > 0
+    tmp_new_docs_to_index = []
+    for new_doc in new_docs_to_index:
+        if new_doc.name in documents:
+            if skip_existing_names:
+                print('Skipping: {} is already indexed!'.format(new_doc.name))
+            else:
+                raise Exception('{} is already indexed! Aborting.'.format(new_doc.name))
+        else:
+            tmp_new_docs_to_index.append(new_doc)
+    new_docs_to_index = tmp_new_docs_to_index
+    if len(new_docs_to_index) == 0:
+        print('No new documents to index.')
+        return
+
     # Update lexicon
     new_word_counts = get_word_counts(new_docs_to_index, parallelism)
     lexicon_words = [
@@ -112,11 +130,6 @@ def main(
 
     global WORKER_LEXICON
     WORKER_LEXICON = Lexicon(lexicon_words)
-
-    assert len(new_docs_to_index) > 0
-    for new_doc in new_docs_to_index:
-        if new_doc.name in documents:
-            raise Exception('{} is already indexed! Aborting.'.format(new_doc))
 
     base_doc_id = len(documents)
     new_documents = [Documents.Document(id=i + base_doc_id, name=d.name)
