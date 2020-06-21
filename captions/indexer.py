@@ -73,7 +73,20 @@ def get_document_word_counts(
     return words
 
 
-def __read_and_index_document(
+class InvertedIndexEntry(NamedTuple):
+    position: int
+    start: int
+    end: int
+
+
+class DocumentLineEntry(NamedTuple):
+    position: int
+    start: int
+    end: int
+    tokens: List[int]
+
+
+def __index_document(
     doc_path: str, lexicon: Lexicon, tokenizer: Tokenizer,
     binary_format: BinaryFormat
 ):
@@ -104,14 +117,16 @@ def __read_and_index_document(
                     except Lexicon.WordDoesNotExist:
                         print('Unknown token: {}'.format(t))
                         continue
-                    doc_inv_index[token.id].append((doc_position, start, end))
+                    doc_inv_index[token.id].append(
+                        InvertedIndexEntry(doc_position, start, end))
                 finally:
                     doc_position += 1
                     tokens.append(
                         binary_format.max_datum_value
                         if token is None else token.id)
 
-            doc_lines.append((entry_start_position, start, end, tokens))
+            doc_lines.append(
+                DocumentLineEntry(entry_start_position, start, end, tokens))
 
         if len(doc_lines) == 0:
             print('Empty file: {}'.format(doc_path))
@@ -121,20 +136,14 @@ def __read_and_index_document(
     return doc_inv_index, doc_lines
 
 
-InvertedIndexEntry = Tuple[int, int, int]
-DocumentLine = Tuple[int, int, int, List[int]]
-
-
 def __write_index_for_document(
-    doc_id: int, doc_inv_index: Dict[int, InvertedIndexEntry],
-    doc_lines: List[DocumentLine], binary_format: BinaryFormat,
-    out_path: str
+    doc_id: int, doc_inv_index: Dict[int, List[InvertedIndexEntry]],
+    binary_format: BinaryFormat, out_path: str
 ):
     f_tokens = BytesIO()
     f_inv_index = BytesIO()
 
     doc_unique_token_count = len(doc_inv_index)
-    doc_line_count = len(doc_lines)
 
     doc_posting_count = 0
     for token_id in sorted(doc_inv_index):
@@ -144,15 +153,37 @@ def __write_index_for_document(
         postings = doc_inv_index[token_id]
         assert len(postings) > 0
 
-        for (position, start, end) in postings:
-            f_inv_index.write(binary_format.encode_time_interval(start, end))
-            f_inv_index.write(binary_format.encode_datum(position))
+        for p in postings:
+            f_inv_index.write(binary_format.encode_time_interval(
+                              p.start, p.end))
+            f_inv_index.write(binary_format.encode_datum(p.position))
             doc_posting_count += 1
 
-    f_time_index = BytesIO()
+    # Checks to make sure that the lengths are correct
+    assert doc_unique_token_count == f_tokens.tell() / (
+        2 * binary_format.datum_bytes)
+    assert doc_posting_count == f_inv_index.tell() / (
+        binary_format.datum_bytes + binary_format.time_interval_bytes)
+
+    # Write the inverted index for the single document
+    with open(out_path, 'wb') as f:
+        f.write(binary_format.encode_u32(doc_id))
+        f.write(binary_format.encode_u32(doc_unique_token_count))
+        f.write(binary_format.encode_u32(doc_posting_count))
+        f.write(f_tokens.getvalue())
+        f.write(f_inv_index.getvalue())
+
+
+def __write_bin_data_for_document(
+    doc_id: int, doc_lines: List[DocumentLineEntry],
+    binary_format: BinaryFormat, out_path: str
+):
+    doc_line_count = len(doc_lines)
+
+    f_lines = BytesIO()
     for position, start, end, _ in doc_lines:
-        f_time_index.write(binary_format.encode_time_interval(start, end))
-        f_time_index.write(binary_format.encode_datum(position))
+        f_lines.write(binary_format.encode_time_interval(start, end))
+        f_lines.write(binary_format.encode_datum(position))
 
     doc_len = 0
     doc_duration = 0
@@ -164,11 +195,7 @@ def __write_index_for_document(
         doc_duration = max(doc_duration, end)
 
     # Checks to make sure that the lengths are correct
-    assert doc_unique_token_count == f_tokens.tell() / (
-        2 * binary_format.datum_bytes)
-    assert doc_posting_count == f_inv_index.tell() / (
-        binary_format.datum_bytes + binary_format.time_interval_bytes)
-    assert doc_line_count == f_time_index.tell() / (
+    assert doc_line_count == f_lines.tell() / (
         binary_format.datum_bytes + binary_format.time_interval_bytes)
     assert doc_len == f_data.tell() / binary_format.datum_bytes
 
@@ -176,22 +203,22 @@ def __write_index_for_document(
     with open(out_path, 'wb') as f:
         f.write(binary_format.encode_u32(doc_id))
         f.write(binary_format.encode_u32(doc_duration))
-        f.write(binary_format.encode_u32(doc_unique_token_count))
-        f.write(binary_format.encode_u32(doc_posting_count))
         f.write(binary_format.encode_u32(doc_line_count))
         f.write(binary_format.encode_u32(doc_len))
-        f.write(f_tokens.getvalue())
-        f.write(f_inv_index.getvalue())
-        f.write(f_time_index.getvalue())
+        f.write(f_lines.getvalue())
         f.write(f_data.getvalue())
 
 
 def index_document(
-    doc_id: int, doc_path: str, lexicon: Lexicon, out_path: str,
+    doc_id: int, doc_path: str, lexicon: Lexicon,
+    index_out_path: str,        # File to save inverted index
+    bin_data_out_path: str,     # File to save binary encoded data
     tokenizer: Tokenizer = default_tokenizer(),
     binary_format: BinaryFormat = BinaryFormat.default()
 ):
-    doc_inv_index, doc_lines = __read_and_index_document(
+    doc_inv_index, doc_lines = __index_document(
         doc_path, lexicon, tokenizer, binary_format)
     __write_index_for_document(
-        doc_id, doc_inv_index, doc_lines, binary_format, out_path)
+        doc_id, doc_inv_index, binary_format, index_out_path)
+    __write_bin_data_for_document(
+        doc_id, doc_lines, binary_format, bin_data_out_path)

@@ -7,6 +7,7 @@ This will produce:
  - document list
  - a lexicon
  - index (one or more files depending on chunk size)
+ - intervals and tokens (in binary format)
 """
 
 import argparse
@@ -47,77 +48,84 @@ def get_args():
     return p.parse_args()
 
 
-def index_single_doc(doc_id: int, doc_path: str, out_path: str):
-    index_document(doc_id, doc_path, WORKER_LEXICON, out_path,
+def init_index_worker(function, lexicon_path: str):
+    function.lexicon = Lexicon.load(lexicon_path)
+
+
+def index_single_doc(args):
+    doc_id, doc_path, index_path, data_path = args
+    index_document(doc_id, doc_path, index_single_doc.lexicon,
+                   index_path, data_path,
                    tokenizer=AlignmentTokenizer())
 
 
 def index_all_docs(
     docs_to_index: List[DocumentToIndex],
-    documents: Documents, lexicon: Lexicon,
-    out_path: str, tmp_dir: str, chunk_size: Optional[int],
-    parallelism: int, keep_tmp_files: bool
+    documents: Documents,
+    lexicon_path: Lexicon,
+    index_out_path: str,
+    data_out_dir: str,
+    tmp_dir: str,
+    chunk_size: Optional[int],
+    parallelism: int,
+    keep_tmp_files: bool
 ):
     """Builds inverted indexes and reencode documents in binary"""
-    global WORKER_LEXICON
-    WORKER_LEXICON = lexicon
     assert len(docs_to_index) == len(documents)
 
-    with tqdm(total=len(documents), desc='Building indexes') as pbar, \
-            Pool(processes=parallelism) as pool:
+    # tqdm(total=len(documents), desc='Indexing documents') as pbar, \
 
-        def progress(ignored):
-            pbar.update(1)
-
-        results = deque()
+    with Pool(
+        processes=parallelism, initializer=init_index_worker,
+        initargs=(index_single_doc, lexicon_path)
+    ) as pool:
+        worker_args = []
+        doc_index_paths = []
         for doc_to_index, doc in zip(docs_to_index, documents):
             assert doc_to_index.name == doc.name
-            doc_out_path = os.path.join(tmp_dir, str(doc.id))
-            results.append((
-                pool.apply_async(
-                    index_single_doc,
-                    (doc.id, doc_to_index.path, doc_out_path),
-                    callback=progress),
-                doc_out_path))
+            doc_index_out_path = os.path.join(
+                tmp_dir, '{:07d}.bin'.format(doc.id))
+            doc_data_out_path = os.path.join(
+                data_out_dir, '{:07d}.bin'.format(doc.id))
+            worker_args.append((doc.id, doc_to_index.path, doc_index_out_path,
+                                doc_data_out_path))
+            doc_index_paths.append(doc_index_out_path)
 
-        for async_result, _ in results:
-            async_result.get()
-
-        # Cat the files together (in batches to avoid too many args)
-        all_doc_index_paths = [x for _, x in results]
+        for _ in tqdm(pool.imap_unordered(index_single_doc, worker_args),
+                      desc='Indexing'):
+            pass
 
         if chunk_size is None:
-            merge_index_files(
-                all_doc_index_paths, out_path, keep_tmp_files=keep_tmp_files)
-        elif chunk_size == 1:
-            shutil.move(tmp_dir, out_path)
+            merge_files(doc_index_paths, index_out_path,
+                        keep_tmp_files=keep_tmp_files)
         else:
-            os.makedirs(out_path)
-            for i in range(0, len(all_doc_index_paths), chunk_size):
-                out_file = os.path.join(
-                    out_path, '{}-{}.bin'.format(
-                        i, min(i + chunk_size, len(all_doc_index_paths))))
-                merge_index_files(
-                    all_doc_index_paths[i:i + chunk_size], out_file,
-                    keep_tmp_files=keep_tmp_files)
+            os.makedirs(index_out_path)
+            for i in range(0, len(doc_index_paths), chunk_size):
+                out_file = '{:07d}-{:07d}.bin'.format(
+                    i, min(i + chunk_size, len(doc_index_paths)))
+                merge_files(doc_index_paths[i:i + chunk_size],
+                            os.path.join(index_out_path, out_file),
+                            keep_tmp_files=keep_tmp_files)
 
 
-def build_or_load_lexicon(
+def build_lexicon(
     docs_to_index: List[DocumentToIndex], lex_path: str, parallelism: int
 ) -> Lexicon:
-    if os.path.exists(lex_path):
-        print('Loading lexicon: {}'.format(lex_path))
-        lexicon = Lexicon.load(lex_path)
-    else:
-        print('Building lexicon: {}'.format(lex_path))
-        word_counts = get_word_counts(docs_to_index, parallelism)
-        lexicon = Lexicon([
-            Lexicon.Word(i, w, word_counts[w])
-            for i, w in enumerate(sorted(word_counts.keys()))
-        ])
-        print('Storing lexicon: {}'.format(lex_path))
-        lexicon.store(lex_path)
-    return lexicon
+    print('Building lexicon: {}'.format(lex_path))
+    word_counts = get_word_counts(docs_to_index, parallelism)
+    lexicon = Lexicon([
+        Lexicon.Word(i, w, word_counts[w])
+        for i, w in enumerate(sorted(word_counts.keys()))
+    ])
+    print('Storing lexicon: {}'.format(lex_path))
+    lexicon.store(lex_path)
+
+
+def remove_if_exists(fpath):
+    if os.path.isdir(fpath):
+        shutil.rmtree(fpath)
+    elif os.path.isfile(fpath):
+        os.remove(fpath)
 
 
 def main(
@@ -135,12 +143,12 @@ def main(
     else:
         docs_to_index = read_docs_from_stdin()
 
-    if not os.path.isdir(out_dir):
-        os.makedirs(out_dir)
+    os.makedirs(out_dir, exist_ok=True)
 
     # Load or build a lexicon
     lex_path = os.path.join(out_dir, 'lexicon.txt')
-    lexicon = build_or_load_lexicon(docs_to_index, lex_path, parallelism)
+    if not os.path.exists(lex_path):
+        build_lexicon(docs_to_index, lex_path, parallelism)
     assert os.path.exists(lex_path), 'Missing: {}'.format(lex_path)
 
     # Build and store the document list
@@ -156,14 +164,15 @@ def main(
     # Build inverted index chunks and reencode the documents
     tmp_dir = os.path.join(out_dir, 'index.tmp')
     index_path = os.path.join(out_dir, 'index.bin')
-    if os.path.isdir(index_path):
-        shutil.rmtree(index_path)
-    elif os.path.isfile(index_path):
-        os.remove(index_path)
+    data_dir = os.path.join(out_dir, 'data')
+    remove_if_exists(index_path)
+    remove_if_exists(data_dir)
+
+    os.makedirs(data_dir)
     os.makedirs(tmp_dir)
     try:
-        index_all_docs(docs_to_index, documents, lexicon, index_path, tmp_dir,
-                       chunk_size, parallelism, keep_tmp_files)
+        index_all_docs(docs_to_index, documents, lex_path, index_path, data_dir,
+                       tmp_dir, chunk_size, parallelism, keep_tmp_files)
     finally:
         if not keep_tmp_files and os.path.exists(tmp_dir):
             shutil.rmtree(tmp_dir)

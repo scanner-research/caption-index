@@ -3,7 +3,6 @@ Indexes for srt files
 """
 
 import csv
-import pickle
 from abc import ABC, abstractmethod, abstractproperty
 from collections import deque
 from typing import (
@@ -124,8 +123,6 @@ class Lexicon(object):
         for w in self._words:
             if prev_w:
                 assert w.id > prev_w.id, 'Bad lexicon, not sorted by id'
-                #assert w.token > prev_w.token, \
-                #    'Bad lexicon, not sorted by token'
             prev_w = w
 
         with open(path, 'w') as f:
@@ -491,9 +488,9 @@ class BinaryFormat(object):
     """
 
     class Config(NamedTuple):
-        start_time_bytes: int   # Number of bytes to encode start times
-        end_time_bytes: int     # Number of bytes to encode end - start
-        datum_bytes: int        # Number of bytes to encode other data
+        start_time_bytes: int = 4   # Number of bytes to encode start times
+        end_time_bytes: int = 2     # Number of bytes to encode end - start
+        datum_bytes: int = 3        # Number of bytes to encode other data
 
     def __init__(self, config: 'BinaryFormat.Config'):
         self._endian = 'little'
@@ -578,8 +575,4 @@ class BinaryFormat(object):
 
     @staticmethod
     def default() -> 'BinaryFormat':
-        return BinaryFormat(
-            BinaryFormat.Config(
-                start_time_bytes=4,
-                end_time_bytes=2,
-                datum_bytes=3))
+        return BinaryFormat(BinaryFormat.Config())

@@ -12,13 +12,10 @@ from subprocess import check_call
 
 import captions as captions
 import captions.util as util
-import captions.ngram as ngram
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)) + '/../tools')
 import scan
 import search
-import index_metadata
-import index_ngram_counts
 
 
 TMP_DIR = None
@@ -30,9 +27,6 @@ TEST_DATA_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
 BUILD_INDEX_SCRIPT = os.path.join(
     os.path.dirname(os.path.abspath(__file__)),
     '..', 'scripts', 'build_index.py')
-COMPUTE_PMI_SCRIPT = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)),
-    '..', 'tools', 'compute_pmi_lexicon.py')
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -216,45 +210,3 @@ def test_script_search():
     search.main(idx_dir, ['GOOD', '&', 'MORNING'], False, 3)
     search.main(idx_dir, ['GOOD', '|', 'MORNING'], False, 3)
     search.main(idx_dir, ['UNITED STATES', '\\', 'DONALD TRUMP'], False, 3)
-
-
-def test_script_index_metadata():
-    idx_dir = os.path.join(TMP_DIR, TEST_INDEX_SUBDIR)
-    meta_path = os.path.join(idx_dir, 'meta.bin')
-
-    index_metadata.main(idx_dir, True)
-
-    documents, lexicon = _get_docs_and_lexicon(idx_dir)
-    with captions.metadata.MetadataIndex(
-            meta_path, documents,
-            index_metadata.NLPTagFormat()) as metadata:
-        for d in documents:
-            assert len(metadata.metadata(d, 0, 0)) == 0
-            for tag in metadata.metadata(d):
-                assert isinstance(tag, str)
-
-
-def test_script_index_ngrams_and_pmi_lexicon():
-    idx_dir = os.path.join(TMP_DIR, TEST_INDEX_SUBDIR)
-    ngram_path = os.path.join(idx_dir, 'ngrams.bin')
-
-    index_ngram_counts.main(idx_dir, n=5, min_count=10, workers=os.cpu_count(),
-                            limit=None)
-
-    _, lexicon = _get_docs_and_lexicon(idx_dir)
-    ngram_frequency = ngram.NgramFrequency(ngram_path, lexicon)
-
-    def test_phrase(tokens):
-        assert ' '.join(tokens) in ngram_frequency
-        assert ngram_frequency[' '.join(tokens)] > 0
-        assert ngram_frequency[tokens] > 0
-        ids = tuple(lexicon[t].id for t in tokens)
-        assert ngram_frequency[ids] > 0
-
-    test_phrase(('UNITED',))
-    test_phrase(('UNITED', 'STATES'))
-    test_phrase(('THE', 'UNITED', 'STATES'))
-    test_phrase(('OF', 'THE', 'UNITED', 'STATES'))
-    test_phrase(('PRESIDENT', 'OF', 'THE', 'UNITED', 'STATES'))
-
-    check_call([COMPUTE_PMI_SCRIPT, idx_dir, 'UNITED', 'STATES'])

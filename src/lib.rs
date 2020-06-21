@@ -11,14 +11,14 @@ use pyo3::Python;
 
 mod common;
 mod index;
-mod metadata;
+// mod data;
 
 use index::RsCaptionIndex;
-use metadata::RsMetadataIndex;
+// use data::RsDocumentData;
 
 #[pymodule]
 fn rs_captions(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
     m.add_class::<RsCaptionIndex>()?;
-    m.add_class::<RsMetadataIndex>()?;
+    // m.add_class::<RsDocumentData>()?;
     Ok(())
 }

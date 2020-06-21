@@ -44,39 +44,40 @@ def get_args():
     return p.parse_args()
 
 
-def index_single_doc(doc_id: int, doc_path: str, out_path: str):
-    index_document(doc_id, doc_path, WORKER_LEXICON, out_path,
-                   tokenizer=AlignmentTokenizer())
+def index_single_doc(args):
+    doc_id, doc_path, index_out_path, data_out_path = args
+    index_document(doc_id, doc_path, WORKER_LEXICON, index_out_path,
+                   data_out_path, tokenizer=AlignmentTokenizer())
 
 
 def index_new_docs(
-    new_docs_to_index: List[DocumentToIndex], new_documents: Documents,
-    out_dir: str, chunk_size: Optional[int], parallelism: int
+    new_docs_to_index: List[DocumentToIndex],
+    new_documents: Documents,
+    tmp_dir: str,
+    chunk_size: Optional[int],
+    parallelism: int
 ):
     """Builds inverted indexes and reencode documents in binary"""
     assert len(new_docs_to_index) == len(new_documents)
 
-    with tqdm(total=len(new_documents), desc='Building indexes') as pbar, \
-            Pool(processes=parallelism) as pool:
-
-        def progress(ignored):
-            pbar.update(1)
-
-        results = deque()
+    with Pool(processes=parallelism) as pool:
+        doc_out_paths = []
+        worker_args = []
         for doc_to_index, doc in zip(new_docs_to_index, new_documents):
             assert doc_to_index.name == doc.name
-            doc_out_path = os.path.join(out_dir, str(doc.id))
-            results.append((
-                pool.apply_async(
-                    index_single_doc,
-                    (doc.id, doc_to_index.path, doc_out_path),
-                    callback=progress),
-                doc_out_path))
+            doc_index_out_path = os.path.join(
+                tmp_dir, '{:07d}.ind'.format(doc.id))
+            doc_data_out_path = os.path.join(
+                tmp_dir, '{:07d}.bin'.format(doc.id))
+            worker_args.append((doc.id, doc_to_index.path, doc_index_out_path,
+                                doc_data_out_path))
+            doc_out_paths.append(doc_index_out_path, )
 
-        for async_result, _ in results:
-            async_result.get()
+        for _ in tqdm(pool.imap_unordered(index_single_doc, worker_args),
+                      desc='Indexing'):
+            pass
 
-    return [x for _, x in results]
+    return zip(*doc_out_paths)
 
 
 def main(
@@ -107,7 +108,8 @@ def main(
             if skip_existing_names:
                 print('Skipping: {} is already indexed!'.format(new_doc.name))
             else:
-                raise Exception('{} is already indexed! Aborting.'.format(new_doc.name))
+                raise Exception(
+                    '{} is already indexed! Aborting.'.format(new_doc.name))
         else:
             tmp_new_docs_to_index.append(new_doc)
     new_docs_to_index = tmp_new_docs_to_index
@@ -118,8 +120,8 @@ def main(
     # Update lexicon
     new_word_counts = get_word_counts(new_docs_to_index, parallelism)
     lexicon_words = [
-        Lexicon.Word(w.id, w.token, w.count + new_word_counts[w.token] \
-                                 if w.token in new_word_counts else w.count)
+        Lexicon.Word(w.id, w.token, w.count + new_word_counts[w.token]
+                     if w.token in new_word_counts else w.count)
         for w in old_lexicon
     ]
     for w in new_word_counts:
@@ -140,8 +142,9 @@ def main(
     if os.path.exists(tmp_dir):
         shutil.rmtree(tmp_dir)
     os.makedirs(tmp_dir)
-    new_doc_index_paths = index_new_docs(
-        new_docs_to_index, new_documents, tmp_dir, chunk_size, parallelism)
+    new_doc_index_paths, new_doc_data_paths = index_new_docs(
+        new_docs_to_index, new_documents, tmp_dir, chunk_size,
+        parallelism)
 
     # Convert existing index.bin to a dirctory if needed
     if os.path.isfile(index_path):
@@ -150,26 +153,27 @@ def main(
         os.makedirs(index_path)
         shutil.move(
             tmp_index_path,
-            os.path.join(index_path, '0-{}.bin'.format(base_doc_id)))
+            os.path.join(index_path, '{:07d}-{:07d}.bin'.format(
+                0, base_doc_id)))
 
     assert os.path.isdir(index_path)
     if chunk_size is None:
         new_index_path = os.path.join(
-            index_path, '{}-{}.bin'.format(
+            index_path, '{:07d}-{:07d}.bin'.format(
                 base_doc_id, base_doc_id + len(new_doc_index_paths)))
-        merge_index_files(new_doc_index_paths, new_index_path)
-    elif chunk_size == 1:
-        for fname in os.listdir(tmp_dir):
-            shutil.move(os.path.join(tmp_dir, fname), index_path)
+        merge_files(new_doc_index_paths, new_index_path)
     else:
         max_doc_id = base_doc_id + len(new_doc_index_paths)
         for i in range(
             base_doc_id, max_doc_id, chunk_size
         ):
-            new_index_path = os.path.join(index_path, '{}-{}.bin'.format(
+            new_index_path = os.path.join(index_path, '{:07d}-{:07d}.bin'.format(
                 i, min(i + chunk_size, max_doc_id)))
-            merge_index_files(
+            merge_files(
                 new_doc_index_paths[i:i + chunk_size], new_index_path)
+
+    for data_path in new_doc_data_paths:
+        shutil.move(data_path, os.path.join(index_dir, 'data'))
 
     if os.path.exists(tmp_dir):
         shutil.rmtree(tmp_dir)
