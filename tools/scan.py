@@ -7,11 +7,10 @@ Count all of the tokens in all of the documents
 import argparse
 import os
 import time
-from tqdm import tqdm
-from collections import deque
 from multiprocessing import Pool
+from tqdm import tqdm
 
-from captions import Lexicon, Documents
+from captions import Documents
 
 
 DEFAULT_WORKERS = os.cpu_count()
@@ -22,8 +21,7 @@ def get_args():
     p.add_argument('index_dir', type=str,
                    help='Directory containing index files')
     p.add_argument('-j', dest='workers', type=int, default=DEFAULT_WORKERS,
-                   help='Number of CPU cores to use. Default: {}'.format(
-                        DEFAULT_WORKERS))
+                   help='Number of CPU cores to use. Default: {}'.format(DEFAULT_WORKERS))
     p.add_argument('--limit', dest='limit', type=int,
                    help='Limit the number of documents to scan')
     return p.parse_args()
@@ -35,6 +33,7 @@ def count_tokens(i):
     for t in count_tokens.documents.open(i).tokens():
         count += 1
     return count
+count_tokens.documents = None
 
 
 def init_worker(function, index_dir):
@@ -52,11 +51,13 @@ def main(index_dir, workers, limit):
         limit = len(documents)
 
     start_time = time.time()
-    with Pool(processes=workers, initializer=init_worker,
-              initargs=(count_tokens, index_dir)) as pool:
+    with Pool(
+            processes=workers, initializer=init_worker,
+            initargs=(count_tokens, index_dir)
+    ) as pool:
         count = 0
         for n in tqdm(pool.imap_unordered(count_tokens, range(limit)),
-                      desc='Counting tokens'):
+                      desc='Counting tokens', total=limit):
             count += n
 
     print('Scanned {} documents for {} tokens in {:d}ms'.format(

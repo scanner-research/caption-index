@@ -53,17 +53,33 @@ def merge_files(
                     os.remove(p)
 
 
-def get_doc_word_counts(doc_path: str) -> Counter:
-    return get_document_word_counts(doc_path, max_word_len=MAX_WORD_LEN)
-
-
-def get_word_counts(docs_to_index: List[DocumentToIndex], parallelism: int):
+def _get_batch_word_counts(doc_paths: List[str]):
     words = Counter()
-    with Pool(processes=parallelism) as pool:
-        for result in tqdm(pool.imap_unordered(
-                get_doc_word_counts, [d.path for d in docs_to_index]
-        ), desc='Building lexicon', total=len(docs_to_index)):
-            words += result
+    for doc_path in doc_paths:
+        get_document_word_counts(
+            doc_path, max_word_len=MAX_WORD_LEN, words=words)
+    return len(doc_paths), list(words.items())
+
+
+def get_word_counts(
+        docs_to_index: List[DocumentToIndex],
+        parallelism: int,
+        batch_size: int = 1000      # use batches to reduce serialization
+) -> Counter:
+    words = Counter()
+
+    batch_args = []
+    for i in range(0, len(docs_to_index), batch_size):
+        batch_args.append([d.path for d in docs_to_index[i:i + batch_size]])
+
+    with Pool(processes=parallelism) as pool, \
+            tqdm(desc='Building lexicon', total=len(docs_to_index)) as pbar:
+        for n, result in pool.imap_unordered(
+                _get_batch_word_counts, batch_args
+        ):
+            for k, v in result:
+                words[k] += v
+            pbar.update(n)
 
     print('Lexicon size: {}'.format(len(words)))
     return words

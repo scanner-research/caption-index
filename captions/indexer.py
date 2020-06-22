@@ -60,9 +60,11 @@ def load_file(doc_path: str) -> List[CaptionLine]:
 def get_document_word_counts(
         doc_path: str,
         tokenizer: Tokenizer = default_tokenizer(),
-        max_word_len: int = 1000
+        max_word_len: int = 1000,
+        words = None
 ) -> Counter:
-    words = Counter()
+    if words is None:
+        words = Counter()
     try:
         subs = load_file(doc_path)
     except Exception as e:

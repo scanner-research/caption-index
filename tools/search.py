@@ -26,8 +26,7 @@ def get_args():
                         help='Silent mode for benchmarking')
     parser.add_argument('-c', dest='context_size', type=int,
                         default=DEFAULT_CONTEXT,
-                        help='Context window width (default: {})'.format(
-                             DEFAULT_CONTEXT))
+                        help='Context window width (default: {})'.format(DEFAULT_CONTEXT))
     parser.add_argument('query', nargs='*')
     return parser.parse_args()
 
@@ -47,7 +46,7 @@ BOLD_ATTRS = ['bold']
 def run_search(query_str, documents, lexicon, index, context_size, silent):
     query = Query(query_str)
     print('Estimated cost (% of index scanned): {}'.format(
-          query.estimate_cost(lexicon) * 100))
+        query.estimate_cost(lexicon) * 100))
 
     start_time = time.time()
     result = query.execute(lexicon, index)
@@ -61,8 +60,7 @@ def run_search(query_str, documents, lexicon, index, context_size, silent):
         occurence_count += len(d.postings)
 
         d_data = documents.open(d.id) if not silent else None
-        for j, p in enumerate(PostingUtil.deoverlap(d.postings,
-                                                    use_time=False)):
+        for j, p in enumerate(PostingUtil.deoverlap(d.postings, use_time=False)):
             total_seconds += p.end - p.start
             if not silent:
                 if context_size > 0:
@@ -129,7 +127,7 @@ def main(index_dir, query, silent, context_size):
                     try:
                         run_search(query, documents, lexicon, index,
                                    context_size, silent)
-                    except Exception:
+                    except:
                         traceback.print_exc()
 
 
