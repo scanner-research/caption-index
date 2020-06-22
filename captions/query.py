@@ -483,7 +483,7 @@ class _QueryParser(NodeVisitor):
         return children[-1] if children else None
 
 
-class Query(object):
+class Query:
     """Parse and execute queries"""
 
     def __init__(self, raw_query: str, **config):

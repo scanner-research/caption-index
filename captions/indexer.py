@@ -1,11 +1,12 @@
 import re
-import pysrt
-import pyvtt
 import traceback
 from html.parser import HTMLParser
 from collections import defaultdict, deque, Counter
 from io import BytesIO
-from typing import Callable, Dict, List, Tuple, NamedTuple
+from typing import Dict, List, NamedTuple
+
+import pyvtt
+import pysrt
 
 from .index import Lexicon, BinaryFormat
 from .tokenize import Tokenizer, default_tokenizer
@@ -57,9 +58,9 @@ def load_file(doc_path: str) -> List[CaptionLine]:
 
 
 def get_document_word_counts(
-    doc_path: str,
-    tokenizer: Tokenizer = default_tokenizer(),
-    max_word_len: int = 1000
+        doc_path: str,
+        tokenizer: Tokenizer = default_tokenizer(),
+        max_word_len: int = 1000
 ) -> Counter:
     words = Counter()
     try:
@@ -87,8 +88,10 @@ class DocumentLineEntry(NamedTuple):
 
 
 def __index_document(
-    doc_path: str, lexicon: Lexicon, tokenizer: Tokenizer,
-    binary_format: BinaryFormat
+        doc_path: str,
+        lexicon: Lexicon,
+        tokenizer: Tokenizer,
+        binary_format: BinaryFormat
 ):
     doc_inv_index = defaultdict(deque)  # token_id -> [postings]
     doc_lines = deque()                 # [(position, start, end, [tokens])]
@@ -99,11 +102,11 @@ def __index_document(
             start, end = s.start, s.end
             if start > end:
                 print('Warning: start time > end time ({} > {})'.format(
-                      start, end))
+                    start, end))
                 end = start
             if end - start > binary_format.max_time_interval:
                 print('Warning: end - start > {}ms'.format(
-                      binary_format.max_time_interval))
+                    binary_format.max_time_interval))
                 end = start + binary_format.max_time_interval
 
             tokens = deque()
@@ -137,8 +140,10 @@ def __index_document(
 
 
 def __write_index_for_document(
-    doc_id: int, doc_inv_index: Dict[int, List[InvertedIndexEntry]],
-    binary_format: BinaryFormat, out_path: str
+        doc_id: int,
+        doc_inv_index: Dict[int, List[InvertedIndexEntry]],
+        binary_format: BinaryFormat,
+        out_path: str
 ):
     f_tokens = BytesIO()
     f_inv_index = BytesIO()
@@ -154,8 +159,8 @@ def __write_index_for_document(
         assert len(postings) > 0
 
         for p in postings:
-            f_inv_index.write(binary_format.encode_time_interval(
-                              p.start, p.end))
+            f_inv_index.write(
+                binary_format.encode_time_interval(p.start, p.end))
             f_inv_index.write(binary_format.encode_datum(p.position))
             doc_posting_count += 1
 
@@ -175,8 +180,10 @@ def __write_index_for_document(
 
 
 def __write_bin_data_for_document(
-    doc_id: int, doc_lines: List[DocumentLineEntry],
-    binary_format: BinaryFormat, out_path: str
+        doc_id: int,
+        doc_lines: List[DocumentLineEntry],
+        binary_format: BinaryFormat,
+        out_path: str
 ):
     doc_line_count = len(doc_lines)
 
@@ -210,11 +217,11 @@ def __write_bin_data_for_document(
 
 
 def index_document(
-    doc_id: int, doc_path: str, lexicon: Lexicon,
-    index_out_path: str,        # File to save inverted index
-    bin_data_out_path: str,     # File to save binary encoded data
-    tokenizer: Tokenizer = default_tokenizer(),
-    binary_format: BinaryFormat = BinaryFormat.default()
+        doc_id: int, doc_path: str, lexicon: Lexicon,
+        index_out_path: str,        # File to save inverted index
+        bin_data_out_path: str,     # File to save binary encoded data
+        tokenizer: Tokenizer = default_tokenizer(),
+        binary_format: BinaryFormat = BinaryFormat.default()
 ):
     doc_inv_index, doc_lines = __index_document(
         doc_path, lexicon, tokenizer, binary_format)

@@ -1,4 +1,4 @@
-from collections import Counter, deque
+from collections import Counter
 from multiprocessing import Pool
 import os
 import sys
@@ -23,8 +23,9 @@ class DocumentToIndex(NamedTuple):
     path: str
 
 
-def list_docs(dir: str) -> List[DocumentToIndex]:
-    return [DocumentToIndex(d, os.path.join(dir, d)) for d in os.listdir(dir)]
+def list_docs(doc_dir: str) -> List[DocumentToIndex]:
+    return [DocumentToIndex(d, os.path.join(doc_dir, d))
+            for d in os.listdir(doc_dir)]
 
 
 def read_docs_from_stdin() -> List[DocumentToIndex]:
@@ -39,8 +40,8 @@ def read_docs_from_stdin() -> List[DocumentToIndex]:
 
 
 def merge_files(
-    paths: List[str], out_path: str,
-    batch_size: int = 1000, keep_tmp_files: bool = False
+        paths: List[str], out_path: str,
+        batch_size: int = 1000, keep_tmp_files: bool = False
 ):
     with open(out_path, 'wb') as f:
         for i in range(0, len(paths), batch_size):
@@ -59,11 +60,9 @@ def get_doc_word_counts(doc_path: str) -> Counter:
 def get_word_counts(docs_to_index: List[DocumentToIndex], parallelism: int):
     words = Counter()
     with Pool(processes=parallelism) as pool:
-        for result in tqdm(
-            pool.imap_unordered(get_doc_word_counts,
-                                [d.path for d in docs_to_index]),
-            desc='Building lexicon'
-        ):
+        for result in tqdm(pool.imap_unordered(
+                get_doc_word_counts, [d.path for d in docs_to_index]
+        ), desc='Building lexicon', total=len(docs_to_index)):
             words += result
 
     print('Lexicon size: {}'.format(len(words)))

@@ -3,12 +3,12 @@ Build a dummy index and run tests on it.
 """
 
 import os
-import pytest
 import shutil
 import tempfile
 from subprocess import check_call
 
-import captions as captions
+import pytest
+import captions
 import captions.decode as decode
 
 from lib.common import get_docs_and_lexicon

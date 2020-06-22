@@ -13,10 +13,9 @@ This will produce:
 import argparse
 import os
 import shutil
-from collections import deque
 from multiprocessing import Pool
+from typing import List, Optional
 from tqdm import tqdm
-from typing import Dict, List, Optional
 
 from captions import Lexicon, Documents
 from captions.indexer import index_document
@@ -35,12 +34,9 @@ def get_args():
     p.add_argument('-d', '--doc-dir', type=str,
                    help='Directory containing captions. If not passed, read from stdin.')
     p.add_argument('-o', dest='out_dir', type=str, default=DEFAULT_OUT_DIR,
-                   help='Output directory. Default: {}'.format(
-                        DEFAULT_OUT_DIR))
-    p.add_argument('-j', dest='parallelism', type=int,
-                   default=DEFAULT_PARALLELISM,
-                   help='Number of CPU cores to use. Default: {}'.format(
-                        DEFAULT_PARALLELISM))
+                   help='Output directory. Default: {}'.format(DEFAULT_OUT_DIR))
+    p.add_argument('-j', dest='parallelism', type=int, default=DEFAULT_PARALLELISM,
+                   help='Number of CPU cores to use. Default: {}'.format(DEFAULT_PARALLELISM))
     p.add_argument('--chunk-size', dest='chunk_size', type=int,
                    help='Break the index into chunks of n documents')
     p.add_argument('--keep-tmp-files', dest='keep_tmp_files',
@@ -57,18 +53,19 @@ def index_single_doc(args):
     index_document(doc_id, doc_path, index_single_doc.lexicon,
                    index_path, data_path,
                    tokenizer=AlignmentTokenizer())
+index_single_doc.lexicon = None
 
 
 def index_all_docs(
-    docs_to_index: List[DocumentToIndex],
-    documents: Documents,
-    lexicon_path: Lexicon,
-    index_out_path: str,
-    data_out_dir: str,
-    tmp_dir: str,
-    chunk_size: Optional[int],
-    parallelism: int,
-    keep_tmp_files: bool
+        docs_to_index: List[DocumentToIndex],
+        documents: Documents,
+        lexicon_path: Lexicon,
+        index_out_path: str,
+        data_out_dir: str,
+        tmp_dir: str,
+        chunk_size: Optional[int],
+        parallelism: int,
+        keep_tmp_files: bool
 ):
     """Builds inverted indexes and reencode documents in binary"""
     assert len(docs_to_index) == len(documents)
@@ -76,8 +73,8 @@ def index_all_docs(
     # tqdm(total=len(documents), desc='Indexing documents') as pbar, \
 
     with Pool(
-        processes=parallelism, initializer=init_index_worker,
-        initargs=(index_single_doc, lexicon_path)
+            processes=parallelism, initializer=init_index_worker,
+            initargs=(index_single_doc, lexicon_path)
     ) as pool:
         worker_args = []
         doc_index_paths = []
@@ -92,7 +89,7 @@ def index_all_docs(
             doc_index_paths.append(doc_index_out_path)
 
         for _ in tqdm(pool.imap_unordered(index_single_doc, worker_args),
-                      desc='Indexing'):
+                      desc='Indexing', total=len(worker_args)):
             pass
 
         if chunk_size is None:
@@ -109,7 +106,9 @@ def index_all_docs(
 
 
 def build_lexicon(
-    docs_to_index: List[DocumentToIndex], lex_path: str, parallelism: int
+        docs_to_index: List[DocumentToIndex],
+        lex_path: str,
+        parallelism: int
 ) -> Lexicon:
     print('Building lexicon: {}'.format(lex_path))
     word_counts = get_word_counts(docs_to_index, parallelism)
@@ -129,10 +128,10 @@ def remove_if_exists(fpath):
 
 
 def main(
-    out_dir: str, doc_dir: Optional[str],
-    parallelism: int = DEFAULT_PARALLELISM,
-    chunk_size: Optional[int] = None,
-    keep_tmp_files: bool = False
+        out_dir: str, doc_dir: Optional[str],
+        parallelism: int = DEFAULT_PARALLELISM,
+        chunk_size: Optional[int] = None,
+        keep_tmp_files: bool = False
 ):
     assert chunk_size is None or chunk_size > 0
     assert parallelism > 0

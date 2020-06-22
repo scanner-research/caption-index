@@ -11,10 +11,9 @@ This will produce:
 import argparse
 import os
 import shutil
-from collections import deque
 from multiprocessing import Pool
+from typing import List, Optional
 from tqdm import tqdm
-from typing import Dict, List, Optional
 
 from captions import Lexicon, Documents
 from captions.indexer import index_document
@@ -33,10 +32,8 @@ def get_args():
                    help='Directory containing existing index')
     p.add_argument('-d', '--new-doc-dir', type=str,
                    help='Directory containing captions. If not passed, read from stdin.')
-    p.add_argument('-j', dest='parallelism', type=int,
-                   default=DEFAULT_PARALLELISM,
-                   help='Number of CPU cores to use. Default: {}'.format(
-                        DEFAULT_PARALLELISM))
+    p.add_argument('-j', dest='parallelism', type=int, default=DEFAULT_PARALLELISM,
+                   help='Number of CPU cores to use. Default: {}'.format(DEFAULT_PARALLELISM))
     p.add_argument('--chunk-size', dest='chunk_size', type=int,
                    help='Break the index into chunks of n documents')
     p.add_argument('--skip-existing-names', action='store_true',
@@ -51,11 +48,10 @@ def index_single_doc(args):
 
 
 def index_new_docs(
-    new_docs_to_index: List[DocumentToIndex],
-    new_documents: Documents,
-    tmp_dir: str,
-    chunk_size: Optional[int],
-    parallelism: int
+        new_docs_to_index: List[DocumentToIndex],
+        new_documents: Documents,
+        tmp_dir: str,
+        parallelism: int
 ):
     """Builds inverted indexes and reencode documents in binary"""
     assert len(new_docs_to_index) == len(new_documents)
@@ -76,17 +72,17 @@ def index_new_docs(
             data_out_paths.append(doc_data_out_path)
 
         for _ in tqdm(pool.imap_unordered(index_single_doc, worker_args),
-                      desc='Indexing'):
+                      desc='Indexing', total=len(worker_args)):
             pass
 
     return index_out_paths, data_out_paths
 
 
 def main(
-    index_dir: str, new_doc_dir: Optional[str],
-    parallelism: int = DEFAULT_PARALLELISM,
-    chunk_size: Optional[int] = None,
-    skip_existing_names: bool = False
+        index_dir: str, new_doc_dir: Optional[str],
+        parallelism: int = DEFAULT_PARALLELISM,
+        chunk_size: Optional[int] = None,
+        skip_existing_names: bool = False
 ):
     assert chunk_size is None or chunk_size > 0
     assert parallelism > 0
@@ -145,8 +141,7 @@ def main(
         shutil.rmtree(tmp_dir)
     os.makedirs(tmp_dir)
     new_doc_index_paths, new_doc_data_paths = index_new_docs(
-        new_docs_to_index, new_documents, tmp_dir, chunk_size,
-        parallelism)
+        new_docs_to_index, new_documents, tmp_dir, parallelism)
 
     # Convert existing index.bin to a dirctory if needed
     if os.path.isfile(index_path):
@@ -167,7 +162,7 @@ def main(
     else:
         max_doc_id = base_doc_id + len(new_doc_index_paths)
         for i in range(
-            base_doc_id, max_doc_id, chunk_size
+                base_doc_id, max_doc_id, chunk_size
         ):
             new_index_path = os.path.join(index_path, '{:07d}-{:07d}.bin'.format(
                 i, min(i + chunk_size, max_doc_id)))
@@ -182,7 +177,7 @@ def main(
 
     # Write out the new documents file
     shutil.move(doc_path, doc_path + '.old')
-    all_documents = [d for d in documents]
+    all_documents = list(documents)
     all_documents.extend(new_documents)
     Documents(all_documents).store(doc_path)
 

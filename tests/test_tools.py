@@ -4,13 +4,13 @@ Build a dummy index and run tests on it.
 
 import math
 import os
-import pytest
 import sys
 import shutil
 import tempfile
 from subprocess import check_call
 
-import captions as captions
+import pytest
+import captions
 import captions.util as util
 
 from lib.common import get_docs_and_lexicon

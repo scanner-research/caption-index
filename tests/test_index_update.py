@@ -7,7 +7,7 @@ import shutil
 import tempfile
 from subprocess import check_call, CalledProcessError
 
-import captions as captions
+import captions
 from lib.common import get_docs_and_lexicon
 
 TEST_DATA_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),

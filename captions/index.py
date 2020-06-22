@@ -17,7 +17,7 @@ WordIdOrWord = Union[int, 'Lexicon.Word']
 OneOrMoreWords = Union[WordIdOrWord, List[WordIdOrWord]]
 
 
-class Lexicon(object):
+class Lexicon:
     """
     A map from word to id, and vice versa
 
@@ -67,6 +67,11 @@ class Lexicon(object):
         return self._words.__iter__()
 
     def __getitem__(self, key: WordIdOrString) -> 'Lexicon.Word':
+        """
+        Enables use of [] indexing]:
+            lexicon[i]
+            lexicon['the']
+        """
         if isinstance(key, int):
             # Get word by id
             try:
@@ -82,6 +87,10 @@ class Lexicon(object):
         raise TypeError('Not supported for {}'.format(type(key)))
 
     def __contains__(self, key: WordIdOrString) -> bool:
+        """
+        Enables use of the 'in' keyword:
+            word in lexicon
+        """
         try:
             self.__getitem__(key)
         except Lexicon.WordDoesNotExist:
@@ -114,6 +123,7 @@ class Lexicon(object):
 
     def decode(self, key: WordIdOrString,
                default: Optional[str] = None) -> str:
+        """Convert words to strings"""
         try:
             return self.__getitem__(key).token
         except Lexicon.WordDoesNotExist:
@@ -158,7 +168,7 @@ class Lexicon(object):
         self._lemmas = lemmas
 
 
-class Documents(object):
+class Documents:
     """
     A mapping from document id to name, and vice versa
 
@@ -194,6 +204,11 @@ class Documents(object):
         return self._docs.__iter__()
 
     def __getitem__(self, key: 'Documents.DocumentIdOrName') -> 'Documents.Document':
+        """
+        Enables use of [] indexing]:
+            documents[i]
+            documents['hello']
+        """
         if isinstance(key, int):
             # Get doc name by id (IndexError)
             try:
@@ -210,6 +225,10 @@ class Documents(object):
         raise TypeError('Not supported for {}'.format(type(key)))
 
     def __contains__(self, key: 'Documents.DocumentIdOrName') -> bool:
+        """
+        Enables use of the 'in' keyword:
+            document in documents
+        """
         try:
             self.__getitem__(key)
         except Documents.DocumentDoesNotExist:
@@ -220,6 +239,7 @@ class Documents(object):
         return len(self._docs)
 
     def prefix(self, key: str) -> List['Documents.Document']:
+        """Find documents by prefix"""
         results = []
         for d in self._docs:
             if d.name.startswith(key):
@@ -248,8 +268,9 @@ class Documents(object):
     """
 
     def configure(
-        self, data_dir: str, binary_format: Optional['BinaryFormat'] = None,
-        debug: bool = False
+            self, data_dir: str,
+            binary_format: Optional['BinaryFormat'] = None,
+            debug: bool = False
     ):
         """Set up path and binary format"""
         if binary_format is None:
@@ -274,7 +295,7 @@ class Documents(object):
                             self._debug)
 
 
-class DocumentData(object):
+class DocumentData:
     """
     Interface to binary encoded captions.
     """
@@ -350,7 +371,8 @@ class _BaseIndex(ABC):
             return self._documents[doc].id
 
     def _to_document_ids(
-        self, docs: Optional[Iterable['_BaseIndex.DocIdOrDocument']]
+            self,
+            docs: Optional[Iterable['_BaseIndex.DocIdOrDocument']]
     ) -> List['CaptionIndex.DocIdOrDocument']:
         return [] if docs is None else [
             self._to_document_id(d) for d in docs]
@@ -384,9 +406,15 @@ class CaptionIndex(_BaseIndex):
         id: int                                 # Document id
         postings: List['CaptionIndex.Posting']  # List of locations
 
-    def __init__(self, path: str, lexicon: Lexicon, documents: Documents,
-                 binary_format: Optional['BinaryFormat'] = None,
-                 tokenizer: Optional[Tokenizer] = None, debug: bool = False):
+    def __init__(
+            self,
+            path: str,
+            lexicon: Lexicon,
+            documents: Documents,
+            binary_format: Optional['BinaryFormat'] = None,
+            tokenizer: Optional[Tokenizer] = None,
+            debug: bool = False
+    ):
         super().__init__(lexicon, documents)
         self._tokenizer = tokenizer
 
@@ -412,8 +440,9 @@ class CaptionIndex(_BaseIndex):
         return self._tokenizer
 
     def search(
-        self, text: Union[str, List[WordIdOrWord]],
-        documents: Optional[Iterable['CaptionIndex.DocIdOrDocument']] = None
+            self,
+            text: Union[str, List[WordIdOrWord]],
+            documents: Optional[Iterable['CaptionIndex.DocIdOrDocument']] = None
     ) -> Iterable['CaptionIndex.Document']:
         """
         Search for instances of text
@@ -431,9 +460,10 @@ class CaptionIndex(_BaseIndex):
 
     @__require_open_index
     def ngram_search(
-        self, first_word: OneOrMoreWords,
-        *other_words,
-        documents: Optional[Iterable['CaptionIndex.DocIdOrDocument']] = None
+            self,
+            first_word: OneOrMoreWords,
+            *other_words,
+            documents: Optional[Iterable['CaptionIndex.DocIdOrDocument']] = None
     ) -> Iterable['CaptionIndex.Document']:
         """Search for ngram instances"""
         doc_ids = self._to_document_ids(documents)
@@ -448,8 +478,9 @@ class CaptionIndex(_BaseIndex):
         return self.__unpack_rs_search(result)
 
     def contains(
-        self, text: Union[str, List[WordIdOrWord]],
-        documents: Optional[Iterable['CaptionIndex.DocIdOrDocument']] = None
+            self,
+            text: Union[str, List[WordIdOrWord]],
+            documents: Optional[Iterable['CaptionIndex.DocIdOrDocument']] = None
     ) -> Set[int]:
         """
         Find documents (ids) containing the text
@@ -467,9 +498,9 @@ class CaptionIndex(_BaseIndex):
 
     @__require_open_index
     def ngram_contains(
-        self, first_word: OneOrMoreWords,
-        *other_words,
-        documents: Optional[Iterable['CaptionIndex.DocIdOrDocument']] = None
+            self, first_word: OneOrMoreWords,
+            *other_words,
+            documents: Optional[Iterable['CaptionIndex.DocIdOrDocument']] = None
     ) -> Set[int]:
         """Find documents (ids) containing the ngram"""
         doc_ids = self._to_document_ids(documents)
@@ -516,7 +547,7 @@ class CaptionIndex(_BaseIndex):
                     CaptionIndex.Posting(*p) for p in postings])
 
 
-class BinaryFormat(object):
+class BinaryFormat:
     """
     Binary data formatter for writing and reading the indexes
 
@@ -594,8 +625,8 @@ class BinaryFormat(object):
         if i < 0:
             raise ValueError('Out of range: {} < 0'.format(i))
         if i > self._max_datum_value:
-            raise ValueError('Out of range: {} > {}'.format(
-                             i, self._max_datum_value))
+            raise ValueError(
+                'Out of range: {} > {}'.format(i, self._max_datum_value))
         return (i).to_bytes(self._datum_bytes, self._endian)
 
     def _decode_u32(self, s: bytes) -> int:

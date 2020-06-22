@@ -7,7 +7,7 @@ from typing import List
 class Tokenizer(ABC):
 
     @abstractmethod
-    def tokens(self, s: str) -> List[str]:
+    def tokens(self, text: str) -> List[str]:
         pass
 
 
@@ -49,15 +49,17 @@ class BasicTokenizer(Tokenizer):
                 result.append(remainder)
         return result
 
-    
+
 class AlignmentTokenizer(Tokenizer):
+    """Our aligned caption files have {}s around misaligned words."""
+
     def __init__(self):
         self._tokenizer = default_tokenizer()
-        
-    def tokens(self, t):
-        if t[0] == '{' and t[-1] == '}':
-            t = t[1:-1]
-        return self._tokenizer.tokens(t)
+
+    def tokens(self, text: str) -> List[str]:
+        if text[0] == '{' and text[-1] == '}':
+            text = text[1:-1]
+        return self._tokenizer.tokens(text)
 
 
 _DEFAULT_TOKENIZER = None
