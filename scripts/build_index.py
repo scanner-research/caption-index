@@ -21,7 +21,9 @@ from captions import Lexicon, Documents
 from captions.indexer import index_document
 from captions.tokenize import AlignmentTokenizer
 
-from lib.common import *
+from lib.common import (
+    DEFAULT_PARALLELISM, DocumentToIndex, read_docs_from_stdin, list_docs,
+    merge_files, get_word_counts)
 
 DEFAULT_OUT_DIR = 'out'
 

@@ -6,6 +6,7 @@ Update an existing index
 This will produce:
  - an updated document list
  - index file(s) for the additional documents
+ - binary data file(s) for the additional documents
 """
 
 import argparse
@@ -19,7 +20,9 @@ from captions import Lexicon, Documents
 from captions.indexer import index_document
 from captions.tokenize import AlignmentTokenizer
 
-from lib.common import *
+from lib.common import (
+    DEFAULT_PARALLELISM, DocumentToIndex, read_docs_from_stdin, list_docs,
+    merge_files, get_word_counts)
 
 
 def get_args():
@@ -131,8 +134,7 @@ def main(
     for w in new_word_counts:
         if w not in old_lexicon:
             lexicon_words.append(
-                Lexicon.Word(len(lexicon_words), w, new_word_counts[w])
-            )
+                Lexicon.Word(len(lexicon_words), w, new_word_counts[w]))
 
     tmp_lex_path = os.path.join(index_dir, 'lexicon.tmp')
     Lexicon(lexicon_words).store(tmp_lex_path)
@@ -170,8 +172,9 @@ def main(
         for i in range(
                 base_doc_id, max_doc_id, chunk_size
         ):
-            new_index_path = os.path.join(index_path, '{:07d}-{:07d}.bin'.format(
-                i, min(i + chunk_size, max_doc_id)))
+            new_index_path = os.path.join(
+                index_path, '{:07d}-{:07d}.bin'.format(
+                    i, min(i + chunk_size, max_doc_id)))
             merge_files(
                 new_doc_index_paths[i:i + chunk_size], new_index_path)
 

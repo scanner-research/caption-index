@@ -51,7 +51,7 @@ that were built by `scripts/build_index.py`.
 
 ## Tests
 
-Run `pytest -v .` from inside the `tests` directory.
+Run `pytest -v` from inside the `tests` directory.
 
 If it complains that spaCy's "en" is missing, you likely need to run
 `python3 -m spacy download en`.
