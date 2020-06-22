@@ -3,14 +3,15 @@ Build a dummy index and run tests on it.
 """
 
 import os
-import pytest
 import shutil
 import tempfile
 from subprocess import check_call
 
-import captions as captions
+import pytest
+import captions
 import captions.decode as decode
 
+from lib.common import get_docs_and_lexicon
 
 TMP_DIR = None
 TEST_SUBS_SUBDIR = 'subs'
@@ -50,19 +51,10 @@ def dummy_data():
         shutil.rmtree(TMP_DIR, True)
 
 
-def _get_docs_and_lexicon(idx_dir):
-    doc_path = os.path.join(idx_dir, 'documents.txt')
-    lex_path = os.path.join(idx_dir, 'lexicon.txt')
-
-    documents = captions.Documents.load(doc_path)
-    lexicon = captions.Lexicon.load(lex_path)
-    return documents, lexicon
-
-
 def test_search():
     idx_dir = os.path.join(TMP_DIR, TEST_INDEX_SUBDIR)
     idx_path = os.path.join(idx_dir, 'index.bin')
-    documents, lexicon = _get_docs_and_lexicon(idx_dir)
+    documents, lexicon = get_docs_and_lexicon(idx_dir)
 
     def count_and_test(index, document, tokens):
         ids = index.contains(tokens, [document])
@@ -71,16 +63,14 @@ def test_search():
         count = 0
         (d,) = list(index.search(tokens, [document]))
         assert len(d.postings) > 0
+        dh = documents.open(document)
         for l in d.postings:
             assert l.len == len(tokens)
             assert abs(l.end - l.start) < 10.0, 'ngram time too large'
             count += 1
 
             # Check that we actually found the right ngrams
-            assert [
-                lexicon.decode(t) for t in
-                index.tokens(d.id, l.idx, l.len)
-            ] == tokens
+            assert [lexicon.decode(t) for t in dh.tokens(l.idx, l.len)] == tokens
 
         return count
 
@@ -114,18 +104,19 @@ def test_search():
 def test_search_position():
     idx_dir = os.path.join(TMP_DIR, TEST_INDEX_SUBDIR)
     idx_path = os.path.join(idx_dir, 'index.bin')
-    documents, lexicon = _get_docs_and_lexicon(idx_dir)
+    documents, lexicon = get_docs_and_lexicon(idx_dir)
 
     with captions.CaptionIndex(idx_path, lexicon, documents) as index:
         test_document = documents['test.srt']
+        dh = documents.open(test_document)
 
         # In range
         for i in range(10):
-            assert index.position(test_document, 5 * i + 2.5) == i
+            assert dh.position(5 * i + 2.5) == i
 
         # Out of range
-        assert index.position(test_document, 51) == 10
-        assert index.position(test_document, 100) == 10
+        assert dh.position(51) == 10
+        assert dh.position(100) == 10
 
 
 def _is_close(a, b):
@@ -135,7 +126,7 @@ def _is_close(a, b):
 def test_search_intervals():
     idx_dir = os.path.join(TMP_DIR, TEST_INDEX_SUBDIR)
     idx_path = os.path.join(idx_dir, 'index.bin')
-    documents, lexicon = _get_docs_and_lexicon(idx_dir)
+    documents, lexicon = get_docs_and_lexicon(idx_dir)
 
     with captions.CaptionIndex(idx_path, lexicon, documents) as index:
         test_document = documents['test.srt']
@@ -166,8 +157,7 @@ def test_search_intervals():
 
 def test_decode():
     idx_dir = os.path.join(TMP_DIR, TEST_INDEX_SUBDIR)
-    idx_path = os.path.join(idx_dir, 'index.bin')
-    documents, lexicon = _get_docs_and_lexicon(idx_dir)
-    with captions.CaptionIndex(idx_path, lexicon, documents) as index:
-        print(decode.get_vtt(lexicon, index, 1))
-        print(decode.get_srt(lexicon, index, 1))
+    documents, lexicon = get_docs_and_lexicon(idx_dir)
+    doc_handle = documents.open(0)
+    print(decode.get_vtt(lexicon, doc_handle))
+    print(decode.get_srt(lexicon, doc_handle))

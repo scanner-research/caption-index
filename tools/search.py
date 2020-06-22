@@ -26,8 +26,7 @@ def get_args():
                         help='Silent mode for benchmarking')
     parser.add_argument('-c', dest='context_size', type=int,
                         default=DEFAULT_CONTEXT,
-                        help='Context window width (default: {})'.format(
-                             DEFAULT_CONTEXT))
+                        help='Context window width (default: {})'.format(DEFAULT_CONTEXT))
     parser.add_argument('query', nargs='*')
     return parser.parse_args()
 
@@ -47,7 +46,7 @@ BOLD_ATTRS = ['bold']
 def run_search(query_str, documents, lexicon, index, context_size, silent):
     query = Query(query_str)
     print('Estimated cost (% of index scanned): {}'.format(
-          query.estimate_cost(lexicon) * 100))
+        query.estimate_cost(lexicon) * 100))
 
     start_time = time.time()
     result = query.execute(lexicon, index)
@@ -59,8 +58,9 @@ def run_search(query_str, documents, lexicon, index, context_size, silent):
         if not silent:
             cprint(documents[d.id].name, 'grey', 'on_white', attrs=BOLD_ATTRS)
         occurence_count += len(d.postings)
-        for j, p in enumerate(PostingUtil.deoverlap(d.postings,
-                                                    use_time=False)):
+
+        d_data = documents.open(d.id) if not silent else None
+        for j, p in enumerate(PostingUtil.deoverlap(d.postings, use_time=False)):
             total_seconds += p.end - p.start
             if not silent:
                 if context_size > 0:
@@ -70,8 +70,8 @@ def run_search(query_str, documents, lexicon, index, context_size, silent):
                         if k >= p.idx and k < p.idx + p.len else
                         lexicon.decode(t)
                         for k, t in enumerate(
-                            index.tokens(
-                                d.id, index=start_idx,
+                            d_data.tokens(
+                                index=start_idx,
                                 count=p.idx + p.len + context_size - start_idx
                             ),
                             start_idx
@@ -102,9 +102,11 @@ def run_search(query_str, documents, lexicon, index, context_size, silent):
 def main(index_dir, query, silent, context_size):
     idx_path = os.path.join(index_dir, 'index.bin')
     doc_path = os.path.join(index_dir, 'documents.txt')
+    data_path = os.path.join(index_dir, 'data')
     lex_path = os.path.join(index_dir, 'lexicon.txt')
 
     documents = Documents.load(doc_path)
+    documents.configure(data_path)
     lexicon = Lexicon.load(lex_path)
 
     with CaptionIndex(idx_path, lexicon, documents) as index:
@@ -125,7 +127,7 @@ def main(index_dir, query, silent, context_size):
                     try:
                         run_search(query, documents, lexicon, index,
                                    context_size, silent)
-                    except Exception:
+                    except:
                         traceback.print_exc()
 
 

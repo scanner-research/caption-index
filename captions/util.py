@@ -4,11 +4,8 @@ Higher level search and NLP functionality built over the base index
 
 import heapq
 import itertools
-import math
 import numpy as np
-import sys
-import os
-from collections import deque, Counter
+from collections import deque
 from typing import Generator, Iterable, List, Tuple, Union
 
 from .index import Lexicon, CaptionIndex
@@ -38,7 +35,8 @@ def window(tokens: Iterable, n: int, subwindows: bool = False) -> Generator:
 
 
 def frequent_words(
-    lexicon: Lexicon, percentile: float = 99.7
+        lexicon: Lexicon,
+        percentile: float = 99.7
 ) -> List[Lexicon.Word]:
     """Return words at a frequency percentile"""
     threshold = np.percentile([w.count for w in lexicon], percentile)
@@ -60,8 +58,9 @@ class PostingUtil(object):
 
     @staticmethod
     def deoverlap(
-        postings: Iterable[CaptionIndex.Posting], threshold: Number = 0,
-        use_time: bool = True
+            postings: Iterable[CaptionIndex.Posting],
+            threshold: Number = 0,
+            use_time: bool = True
     ) -> List[CaptionIndex.Posting]:
         """Merge postings which overlap"""
         result = []
@@ -90,19 +89,20 @@ class PostingUtil(object):
 
     @staticmethod
     def dilate(
-        postings: Iterable[CaptionIndex.Posting], window: Number,
-        duration: Number
+            postings: Iterable[CaptionIndex.Posting],
+            amount: Number,
+            duration: Number
     ) -> List[CaptionIndex.Posting]:
         """Dilate start and end times"""
         return [p._replace(
-                    start=max(p.start - window, 0),
-                    end=min(p.end + window, duration)
-                ) for p in postings]
+            start=max(p.start - amount, 0), end=min(p.end + amount, duration)
+        ) for p in postings]
 
     @staticmethod
     def to_fixed_length(
-        postings: Iterable[CaptionIndex.Posting], length: Number,
-        duration: Number
+            postings: Iterable[CaptionIndex.Posting],
+            length: Number,
+            duration: Number
     ) -> List[CaptionIndex.Posting]:
         """Dilate start and end times"""
         result = []
@@ -117,15 +117,13 @@ class PostingUtil(object):
 
     @staticmethod
     def union(
-        postings_lists: List[Iterable[CaptionIndex.Posting]],
-        use_time: bool = True
+            postings_lists: List[Iterable[CaptionIndex.Posting]],
+            use_time: bool = True
     ) -> List[CaptionIndex.Posting]:
         """Merge several lists of postings by order of idx."""
-        def get_priority(p: CaptionIndex.Posting) -> Tuple[Number, Number]:
-            if use_time:
-                return (p.start, p.idx)
-            else:
-                return (p.idx, p.start)
+
+        def get_priority(p) -> Tuple[Number, Number]:
+            return (p.start, p.idx) if use_time else (p.idx, p.start)
 
         postings_lists_with_priority = [
             ((get_priority(p), p) for p in pl) for pl in postings_lists]
@@ -134,7 +132,7 @@ class PostingUtil(object):
 
 
 def group_results_by_document(
-    results: List[Iterable[CaptionIndex.Document]]
+        results: List[Iterable[CaptionIndex.Document]]
 ) -> Generator[
     Tuple[int, List[List[CaptionIndex.Posting]]], None, None
 ]:

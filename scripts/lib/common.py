@@ -1,9 +1,9 @@
-from collections import Counter, deque
+from collections import Counter
 from multiprocessing import Pool
 import os
 import sys
 from subprocess import check_call
-from typing import List, NamedTuple
+from typing import List, NamedTuple, Optional
 
 from tqdm import tqdm
 
@@ -23,8 +23,9 @@ class DocumentToIndex(NamedTuple):
     path: str
 
 
-def list_docs(dir: str) -> List[DocumentToIndex]:
-    return [DocumentToIndex(d, os.path.join(dir, d)) for d in os.listdir(dir)]
+def list_docs(doc_dir: str) -> List[DocumentToIndex]:
+    return [DocumentToIndex(d, os.path.join(doc_dir, d))
+            for d in os.listdir(doc_dir)]
 
 
 def read_docs_from_stdin() -> List[DocumentToIndex]:
@@ -38,41 +39,52 @@ def read_docs_from_stdin() -> List[DocumentToIndex]:
     return result
 
 
-def merge_index_files(
-    doc_index_paths: List[str], out_path: str,
-    batch_size: int = 1000, keep_tmp_files: bool = False
+def merge_files(
+        paths: List[str], out_path: str,
+        batch_size: int = 1000, keep_tmp_files: bool = False
 ):
     with open(out_path, 'wb') as f:
-        for i in range(0, len(doc_index_paths), batch_size):
-            max_idx = min(i + batch_size, len(doc_index_paths))
-            batch_doc_index_paths = doc_index_paths[i:max_idx]
-            check_call(['cat'] + batch_doc_index_paths, stdout=f)
+        for i in range(0, len(paths), batch_size):
+            max_idx = min(i + batch_size, len(paths))
+            batch_paths = paths[i:max_idx]
+            check_call(['cat'] + batch_paths, stdout=f)
             if not keep_tmp_files:
-                for p in batch_doc_index_paths:
+                for p in batch_paths:
                     os.remove(p)
 
 
-def get_doc_word_counts(doc_path: str) -> Counter:
-    return get_document_word_counts(doc_path, max_word_len=MAX_WORD_LEN)
-
-
-def get_word_counts(docs_to_index: List[DocumentToIndex], parallelism: int):
+def _get_batch_word_counts(doc_paths: List[str]):
     words = Counter()
-    with tqdm(total=len(docs_to_index), desc='Building lexicon') as pbar, \
-            Pool(processes=parallelism) as pool:
+    for doc_path in doc_paths:
+        get_document_word_counts(
+            doc_path, max_word_len=MAX_WORD_LEN, words=words)
+    return len(doc_paths), list(words.items())
 
-        def collect(result):
-            pbar.update(1)
 
-        async_results = deque()
-        for d in docs_to_index:
-            async_results.append(pool.apply_async(
-                get_doc_word_counts, (d.path,), callback=collect))
+def get_word_counts(
+        docs_to_index: List[DocumentToIndex],
+        parallelism: int,
+        batch_size: Optional[int] = None    # use batches to reduce
+                                            # communication overhead
+) -> Counter:
+    words = Counter()
+    if batch_size is None:
+        batch_size = int(len(docs_to_index) / 10 / os.cpu_count())
+        batch_size = min(max(batch_size, 1), 1000)
+    assert batch_size > 0
 
-        # Forces exceptions to be rethrown
-        for a in async_results:
-            words.update(a.get())
+    batch_args = []
+    for i in range(0, len(docs_to_index), batch_size):
+        batch_args.append([d.path for d in docs_to_index[i:i + batch_size]])
+
+    with Pool(processes=parallelism) as pool, \
+            tqdm(desc='Building lexicon', total=len(docs_to_index)) as pbar:
+        for n, result in pool.imap_unordered(
+                _get_batch_word_counts, batch_args
+        ):
+            for k, v in result:
+                words[k] += v
+            pbar.update(n)
 
     print('Lexicon size: {}'.format(len(words)))
     return words
-

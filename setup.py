@@ -31,7 +31,7 @@ tests_require = install_requires + ['pytest>=4.2.1', 'pyaml>=18.11.0']
 
 setup(
     name='caption-index',
-    version='0.3.0',
+    version='1.0.0',
     classifiers=[],
     packages=['captions'],
     rust_extensions=[RustExtension('captions.rs_captions', 'Cargo.toml')],

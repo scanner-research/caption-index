@@ -4,21 +4,20 @@ Build a dummy index and run tests on it.
 
 import math
 import os
-import pytest
 import sys
 import shutil
 import tempfile
 from subprocess import check_call
 
-import captions as captions
+import pytest
+import captions
 import captions.util as util
-import captions.ngram as ngram
+
+from lib.common import get_docs_and_lexicon
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)) + '/../tools')
 import scan
 import search
-import index_metadata
-import index_ngram_counts
 
 
 TMP_DIR = None
@@ -30,9 +29,6 @@ TEST_DATA_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
 BUILD_INDEX_SCRIPT = os.path.join(
     os.path.dirname(os.path.abspath(__file__)),
     '..', 'scripts', 'build_index.py')
-COMPUTE_PMI_SCRIPT = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)),
-    '..', 'tools', 'compute_pmi_lexicon.py')
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -60,15 +56,6 @@ def dummy_data():
         shutil.rmtree(TMP_DIR, True)
 
 
-def _get_docs_and_lexicon(idx_dir):
-    doc_path = os.path.join(idx_dir, 'documents.txt')
-    lex_path = os.path.join(idx_dir, 'lexicon.txt')
-
-    documents = captions.Documents.load(doc_path)
-    lexicon = captions.Lexicon.load(lex_path)
-    return documents, lexicon
-
-
 def test_tokenize():
     text = 'I\'m a string! This is a tokenizer test; just a test. (A simple test)'
     tokens = list(captions.default_tokenizer().tokens(text))
@@ -87,7 +74,7 @@ def test_lemmatize():
 
     # Force lemmatization in the lexicon
     idx_dir = os.path.join(TMP_DIR, TEST_INDEX_SUBDIR)
-    _, lexicon = _get_docs_and_lexicon(idx_dir)
+    _, lexicon = get_docs_and_lexicon(idx_dir)
     assert lexicon['DUCK'].id in lexicon.similar('DUCKS')
 
 
@@ -115,7 +102,7 @@ def test_binary_format():
 def test_inverted_index():
     idx_dir = os.path.join(TMP_DIR, TEST_INDEX_SUBDIR)
     idx_path = os.path.join(idx_dir, 'index.bin')
-    documents, lexicon = _get_docs_and_lexicon(idx_dir)
+    documents, lexicon = get_docs_and_lexicon(idx_dir)
 
     def test_search_and_contains(tokens, doc_ids=None):
         ids = index.contains(tokens, doc_ids)
@@ -157,50 +144,45 @@ def test_inverted_index():
 
 def test_token_data():
     idx_dir = os.path.join(TMP_DIR, TEST_INDEX_SUBDIR)
-    idx_path = os.path.join(idx_dir, 'index.bin')
-    documents, lexicon = _get_docs_and_lexicon(idx_dir)
-    with captions.CaptionIndex(idx_path, lexicon, documents) as index:
-        for i in range(len(documents)):
-            doc_len = index.document_length(i)
-            tokens = index.tokens(i)
-            assert len(tokens) == doc_len, \
-                '{} has an inconsistent number of tokens'.format(
-                documents[i].name)
-            for t in tokens:
-                lexicon.decode(t)
+    documents, lexicon = get_docs_and_lexicon(idx_dir)
+    for i in range(len(documents)):
+        dh = documents.open(i)
+        doc_len = dh.length
+        tokens = dh.tokens()
+        assert len(tokens) == doc_len, \
+            '{} has an inconsistent number of tokens'.format(documents[i].name)
+        for t in tokens:
+            lexicon.decode(t)
 
 
 def test_intervals_data():
     idx_dir = os.path.join(TMP_DIR, TEST_INDEX_SUBDIR)
-    idx_path = os.path.join(idx_dir, 'index.bin')
-    documents, lexicon = _get_docs_and_lexicon(idx_dir)
-    with captions.CaptionIndex(idx_path, lexicon, documents) as index:
-        for i in range(len(documents)):
-            assert len(index.intervals(i, 0, 0)) == 0
-            duration = index.document_duration(i)
-            postings = index.intervals(i)
-            assert len(postings) > 0, \
-                '{} has no intervals'.format(documents[i].name)
-            length_from_intervals = 0
-            posting_lens = []
-            for posting in postings:
-                length_from_intervals += posting.len
-                posting_lens.append(posting.len)
-            assert math.fabs(postings[-1].end - duration) < 1e-6
-            assert length_from_intervals == index.document_length(i), \
-                '{} has an inconsistent number of tokens'.format(
-                documents[i].name)
+    documents, _ = get_docs_and_lexicon(idx_dir)
+    for i in range(len(documents)):
+        dh = documents.open(i)
+
+        assert len(dh.lines(0, 0)) == 0
+        duration = dh.duration
+        lines = dh.lines()
+        assert len(lines) > 0, \
+            '{} has no intervals'.format(documents[i].name)
+        length_from_intervals = 0
+        for line in lines:
+            length_from_intervals += line.len
+        assert math.fabs(lines[-1].end - duration) < 1e-6
+        assert length_from_intervals == dh.length, \
+            '{} has an inconsistent number of tokens'.format(documents[i].name)
 
 
 def test_util_window():
-    input = [0, 1, 2, 3]
-    assert list(util.window(input, 2)) == [(0, 1), (1, 2), (2, 3)]
-    assert list(util.window(input, 3)) == [(0, 1, 2), (1, 2, 3)]
+    values = [0, 1, 2, 3]
+    assert list(util.window(values, 2)) == [(0, 1), (1, 2), (2, 3)]
+    assert list(util.window(values, 3)) == [(0, 1, 2), (1, 2, 3)]
 
 
 def test_frequent_words():
     idx_dir = os.path.join(TMP_DIR, TEST_INDEX_SUBDIR)
-    _, lexicon = _get_docs_and_lexicon(idx_dir)
+    _, lexicon = get_docs_and_lexicon(idx_dir)
     assert len(util.frequent_words(lexicon, 100)) == 1
     assert len(util.frequent_words(lexicon, 0)) == len(lexicon)
     assert len(util.frequent_words(lexicon, 99)) > 0
@@ -216,45 +198,5 @@ def test_script_search():
     search.main(idx_dir, ['GOOD', '&', 'MORNING'], False, 3)
     search.main(idx_dir, ['GOOD', '|', 'MORNING'], False, 3)
     search.main(idx_dir, ['UNITED STATES', '\\', 'DONALD TRUMP'], False, 3)
-
-
-def test_script_index_metadata():
-    idx_dir = os.path.join(TMP_DIR, TEST_INDEX_SUBDIR)
-    meta_path = os.path.join(idx_dir, 'meta.bin')
-
-    index_metadata.main(idx_dir, True)
-
-    documents, lexicon = _get_docs_and_lexicon(idx_dir)
-    with captions.metadata.MetadataIndex(
-            meta_path, documents,
-            index_metadata.NLPTagFormat()) as metadata:
-        for d in documents:
-            assert len(metadata.metadata(d, 0, 0)) == 0
-            for tag in metadata.metadata(d):
-                assert isinstance(tag, str)
-
-
-def test_script_index_ngrams_and_pmi_lexicon():
-    idx_dir = os.path.join(TMP_DIR, TEST_INDEX_SUBDIR)
-    ngram_path = os.path.join(idx_dir, 'ngrams.bin')
-
-    index_ngram_counts.main(idx_dir, n=5, min_count=10, workers=os.cpu_count(),
-                            limit=None)
-
-    _, lexicon = _get_docs_and_lexicon(idx_dir)
-    ngram_frequency = ngram.NgramFrequency(ngram_path, lexicon)
-
-    def test_phrase(tokens):
-        assert ' '.join(tokens) in ngram_frequency
-        assert ngram_frequency[' '.join(tokens)] > 0
-        assert ngram_frequency[tokens] > 0
-        ids = tuple(lexicon[t].id for t in tokens)
-        assert ngram_frequency[ids] > 0
-
-    test_phrase(('UNITED',))
-    test_phrase(('UNITED', 'STATES'))
-    test_phrase(('THE', 'UNITED', 'STATES'))
-    test_phrase(('OF', 'THE', 'UNITED', 'STATES'))
-    test_phrase(('PRESIDENT', 'OF', 'THE', 'UNITED', 'STATES'))
-
-    check_call([COMPUTE_PMI_SCRIPT, idx_dir, 'UNITED', 'STATES'])
+    search.main(idx_dir, ['[STATES]'], False, 3)
+    search.main(idx_dir, ['[FIGHT]', '&', '[STATES]'], False, 3)

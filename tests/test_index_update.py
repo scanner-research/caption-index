@@ -5,9 +5,10 @@ Build a dummy index, update it, and run tests on it.
 import os
 import shutil
 import tempfile
-from subprocess import check_call
+from subprocess import check_call, CalledProcessError
 
-import captions as captions
+import captions
+from lib.common import get_docs_and_lexicon
 
 TEST_DATA_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                               'test-small.tar.gz')
@@ -18,15 +19,6 @@ BUILD_INDEX_SCRIPT = os.path.join(
 UPDATE_INDEX_SCRIPT = os.path.join(
     os.path.dirname(os.path.abspath(__file__)),
     '..', 'scripts', 'update_index.py')
-
-
-def _get_docs_and_lexicon(idx_dir):
-    doc_path = os.path.join(idx_dir, 'documents.txt')
-    lex_path = os.path.join(idx_dir, 'lexicon.txt')
-
-    documents = captions.Documents.load(doc_path)
-    lexicon = captions.Lexicon.load(lex_path)
-    return documents, lexicon
 
 
 def test_update_index():
@@ -46,7 +38,7 @@ def test_update_index():
     try:
         check_call([UPDATE_INDEX_SCRIPT, '-d', subs_dir, idx_dir])
         raise Exception('Uh oh, an exception should have been thrown...')
-    except:
+    except CalledProcessError:
         pass
 
     # Update the index (should do nothing since all of them are duplicates)
@@ -68,6 +60,7 @@ def test_update_index():
 
         count = 0
         (d,) = list(index.search(tokens, [document]))
+        dh = documents.open(document)
         assert len(d.postings) > 0
         for l in d.postings:
             assert l.len == len(tokens)
@@ -75,14 +68,11 @@ def test_update_index():
             count += 1
 
             # Check that we actually found the right ngrams
-            assert [
-                lexicon.decode(t) for t in
-                index.tokens(d.id, l.idx, l.len)
-            ] == tokens
+            assert [lexicon.decode(t) for t in dh.tokens(l.idx, l.len)] == tokens
 
         return count
 
-    documents, lexicon = _get_docs_and_lexicon(idx_dir)
+    documents, lexicon = get_docs_and_lexicon(idx_dir)
     idx_path = os.path.join(idx_dir, 'index.bin')
     assert os.path.isdir(idx_path)
     assert len(os.listdir(idx_path)) == 2, os.listdir(idx_path)

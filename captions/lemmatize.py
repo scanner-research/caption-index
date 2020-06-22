@@ -3,7 +3,7 @@ from typing import Set
 PARTS_OF_SPEECH = ['noun', 'verb']
 
 
-class SpacyLemmatizer(object):
+class SpacyLemmatizer:
 
     def __init__(self):
         from spacy.lemmatizer import Lemmatizer
