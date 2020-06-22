@@ -150,15 +150,14 @@ def test_token_data():
         doc_len = dh.length
         tokens = dh.tokens()
         assert len(tokens) == doc_len, \
-            '{} has an inconsistent number of tokens'.format(
-            documents[i].name)
+            '{} has an inconsistent number of tokens'.format(documents[i].name)
         for t in tokens:
             lexicon.decode(t)
 
 
 def test_intervals_data():
     idx_dir = os.path.join(TMP_DIR, TEST_INDEX_SUBDIR)
-    documents, lexicon = get_docs_and_lexicon(idx_dir)
+    documents, _ = get_docs_and_lexicon(idx_dir)
     for i in range(len(documents)):
         dh = documents.open(i)
 
@@ -172,14 +171,13 @@ def test_intervals_data():
             length_from_intervals += line.len
         assert math.fabs(lines[-1].end - duration) < 1e-6
         assert length_from_intervals == dh.length, \
-            '{} has an inconsistent number of tokens'.format(
-            documents[i].name)
+            '{} has an inconsistent number of tokens'.format(documents[i].name)
 
 
 def test_util_window():
-    input = [0, 1, 2, 3]
-    assert list(util.window(input, 2)) == [(0, 1), (1, 2), (2, 3)]
-    assert list(util.window(input, 3)) == [(0, 1, 2), (1, 2, 3)]
+    values = [0, 1, 2, 3]
+    assert list(util.window(values, 2)) == [(0, 1), (1, 2), (2, 3)]
+    assert list(util.window(values, 3)) == [(0, 1, 2), (1, 2, 3)]
 
 
 def test_frequent_words():
@@ -200,3 +198,5 @@ def test_script_search():
     search.main(idx_dir, ['GOOD', '&', 'MORNING'], False, 3)
     search.main(idx_dir, ['GOOD', '|', 'MORNING'], False, 3)
     search.main(idx_dir, ['UNITED STATES', '\\', 'DONALD TRUMP'], False, 3)
+    search.main(idx_dir, ['[STATES]'], False, 3)
+    search.main(idx_dir, ['[FIGHT]', '&', '[STATES]'], False, 3)

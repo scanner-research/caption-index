@@ -3,7 +3,7 @@
 use rayon::prelude::*;
 use pyo3::prelude::*;
 use pyo3::exceptions;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BinaryHeap};
 use std::cmp::Ordering;
 use std::mem;
 use std::fs::{File, metadata, read_dir};
@@ -67,6 +67,32 @@ fn parse_index(m: &Mmap, file_num: usize, datum_size: usize,
     docs
 }
 
+#[derive(Copy, Clone)]
+struct HeapPosting {
+    posting: Posting,
+    origin: usize
+}
+
+impl Eq for HeapPosting {}
+
+impl PartialEq for HeapPosting {
+    fn eq(&self, other: &Self) -> bool {
+        self.posting.2 == other.posting.2 && self.origin == other.origin
+    }
+}
+
+impl Ord for HeapPosting {
+    fn cmp(&self, other: &HeapPosting) -> Ordering {
+        other.posting.2.cmp(&self.posting.2).then_with(|| self.origin.cmp(&other.origin))
+    }
+}
+
+impl PartialOrd for HeapPosting {
+    fn partial_cmp(&self, other: &HeapPosting) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
 struct _RsCaptionIndexImpl {
     docs: BTreeMap<DocumentId, Document>,
     data: Vec<Mmap>,
@@ -110,14 +136,14 @@ impl _RsCaptionIndexImpl {
             let pivot_token = self.read_datum(m, ofs);
             if pivot_token == token {
                 let posting_idx = self.read_datum(m, ofs + self.datum_size);
-                let n = if pivot < (d.unique_token_count as usize) - 1 {
+                let posting_idx_plus_n = if pivot < (d.unique_token_count as usize) - 1 {
                     // Get start of next entry
                     self.read_datum(m, ofs + token_entry_size + self.datum_size)
                 } else {
                     d.posting_count
-                } - posting_idx;
-                assert!(n > 0, "Invalid next token posting index");
-                return Some((posting_idx as usize, n))
+                };
+                assert!(posting_idx_plus_n > posting_idx, "Invalid next token posting index");
+                return Some((posting_idx as usize, posting_idx_plus_n - posting_idx))
             } else if pivot_token < token {
                 min_idx = pivot + 1;
             } else {
@@ -158,14 +184,40 @@ impl _RsCaptionIndexImpl {
         if posting_offsets.len() == 1 {
             self.read_postings_one(document, posting_offsets[0].0, posting_offsets[0].1)
         } else {
-            // TODO: more efficient merge needed
-            let mut postings: Vec<Posting> = posting_offsets.iter().flat_map(
-                |p| self.read_postings_one(document, p.0, p.1)
-            ).collect();
-            postings.sort_by(|a, b| match a.0.partial_cmp(&b.0) {
-                Some(ord) => if ord == Ordering::Equal {a.2.cmp(&b.2) } else { ord }
-                None => a.2.cmp(&b.2)
-            });
+            let m = &self.data[document.file_num];
+            let time_int_size = self.time_int_size();
+            let posting_size = self.posting_size();
+            let base_ofs = document.base_offset + document.inv_index_offset;
+
+            let read_single_posting = |idx| {
+                let ofs = idx * posting_size + base_ofs;
+                let time_int = self.read_time_int(m, ofs);
+                let pos = self.read_datum(m, ofs + time_int_size) as usize;
+                (ms_to_s(time_int.0), ms_to_s(time_int.1), pos, 1)
+            };
+
+            let mut iter_idxs = vec![0u32; posting_offsets.len()];
+            let mut heap = BinaryHeap::new();
+            let mut postings = Vec::with_capacity(
+                posting_offsets.iter().map(|ofs| ofs.1).sum::<u32>() as usize);
+            for i in 0..posting_offsets.len() {
+                heap.push(HeapPosting {
+                    origin: i,
+                    posting: read_single_posting(posting_offsets[i].0)
+                });
+                iter_idxs[i] += 1;
+            }
+
+            while let Some(HeapPosting { posting, origin }) = heap.pop() {
+                postings.push(posting);
+                if iter_idxs[origin] < posting_offsets[origin].1 {
+                    heap.push(HeapPosting {
+                        origin: origin,
+                        posting: read_single_posting(posting_offsets[origin].0)
+                    });
+                    iter_idxs[origin] += 1;
+                }
+            }
             postings
         }
     }
@@ -192,6 +244,7 @@ impl _RsCaptionIndexImpl {
             if p.2 < init_pos { None } else { Some(p.2 - init_pos) }
         }).collect();
 
+        // Check candidate indices with postings at each position in the order of the query plan
         for i in 1..ngram_len {
             let pos = query_plan[i];
             let postings = self.read_postings_many(document, posting_offsets[pos].as_ref().unwrap());
@@ -212,7 +265,7 @@ impl _RsCaptionIndexImpl {
                 let p2 = postings[postings_iter_idx];
                 if p2.2 == exp_idx {
                     if i == ngram_len - 1 {
-                        return true;
+                        return true;    // Short circuit as soon as one is found
                     } else {
                         new_cand_idxs.push(cand_idx);
                     }
@@ -247,9 +300,11 @@ impl _RsCaptionIndexImpl {
             if p.2 < init_pos { None } else { Some((p.0, p.1, p.2 - init_pos, ngram_len)) }
         }).collect();
 
+        // Merge lists of postings in a pairwise manner according to the query plan
         for i in 1..ngram_len {
             let pos = query_plan[i];
-            let postings2 = self.read_postings_many(document, posting_offsets[pos].as_ref().unwrap());
+            let postings2 = self.read_postings_many(
+                document, posting_offsets[pos].as_ref().unwrap());
             let postings2_len = postings2.len();
             let mut posting2_iter_idx = 0;
 
