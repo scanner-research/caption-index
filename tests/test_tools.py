@@ -13,6 +13,8 @@ from subprocess import check_call
 import captions as captions
 import captions.util as util
 
+from lib.common import get_docs_and_lexicon
+
 sys.path.append(os.path.dirname(os.path.abspath(__file__)) + '/../tools')
 import scan
 import search
@@ -54,15 +56,6 @@ def dummy_data():
         shutil.rmtree(TMP_DIR, True)
 
 
-def _get_docs_and_lexicon(idx_dir):
-    doc_path = os.path.join(idx_dir, 'documents.txt')
-    lex_path = os.path.join(idx_dir, 'lexicon.txt')
-
-    documents = captions.Documents.load(doc_path)
-    lexicon = captions.Lexicon.load(lex_path)
-    return documents, lexicon
-
-
 def test_tokenize():
     text = 'I\'m a string! This is a tokenizer test; just a test. (A simple test)'
     tokens = list(captions.default_tokenizer().tokens(text))
@@ -81,7 +74,7 @@ def test_lemmatize():
 
     # Force lemmatization in the lexicon
     idx_dir = os.path.join(TMP_DIR, TEST_INDEX_SUBDIR)
-    _, lexicon = _get_docs_and_lexicon(idx_dir)
+    _, lexicon = get_docs_and_lexicon(idx_dir)
     assert lexicon['DUCK'].id in lexicon.similar('DUCKS')
 
 
@@ -109,7 +102,7 @@ def test_binary_format():
 def test_inverted_index():
     idx_dir = os.path.join(TMP_DIR, TEST_INDEX_SUBDIR)
     idx_path = os.path.join(idx_dir, 'index.bin')
-    documents, lexicon = _get_docs_and_lexicon(idx_dir)
+    documents, lexicon = get_docs_and_lexicon(idx_dir)
 
     def test_search_and_contains(tokens, doc_ids=None):
         ids = index.contains(tokens, doc_ids)
@@ -151,39 +144,36 @@ def test_inverted_index():
 
 def test_token_data():
     idx_dir = os.path.join(TMP_DIR, TEST_INDEX_SUBDIR)
-    idx_path = os.path.join(idx_dir, 'index.bin')
-    documents, lexicon = _get_docs_and_lexicon(idx_dir)
-    with captions.CaptionIndex(idx_path, lexicon, documents) as index:
-        for i in range(len(documents)):
-            doc_len = index.document_length(i)
-            tokens = index.tokens(i)
-            assert len(tokens) == doc_len, \
-                '{} has an inconsistent number of tokens'.format(
-                documents[i].name)
-            for t in tokens:
-                lexicon.decode(t)
+    documents, lexicon = get_docs_and_lexicon(idx_dir)
+    for i in range(len(documents)):
+        dh = documents.open(i)
+        doc_len = dh.length
+        tokens = dh.tokens()
+        assert len(tokens) == doc_len, \
+            '{} has an inconsistent number of tokens'.format(
+            documents[i].name)
+        for t in tokens:
+            lexicon.decode(t)
 
 
 def test_intervals_data():
     idx_dir = os.path.join(TMP_DIR, TEST_INDEX_SUBDIR)
-    idx_path = os.path.join(idx_dir, 'index.bin')
-    documents, lexicon = _get_docs_and_lexicon(idx_dir)
-    with captions.CaptionIndex(idx_path, lexicon, documents) as index:
-        for i in range(len(documents)):
-            assert len(index.intervals(i, 0, 0)) == 0
-            duration = index.document_duration(i)
-            postings = index.intervals(i)
-            assert len(postings) > 0, \
-                '{} has no intervals'.format(documents[i].name)
-            length_from_intervals = 0
-            posting_lens = []
-            for posting in postings:
-                length_from_intervals += posting.len
-                posting_lens.append(posting.len)
-            assert math.fabs(postings[-1].end - duration) < 1e-6
-            assert length_from_intervals == index.document_length(i), \
-                '{} has an inconsistent number of tokens'.format(
-                documents[i].name)
+    documents, lexicon = get_docs_and_lexicon(idx_dir)
+    for i in range(len(documents)):
+        dh = documents.open(i)
+
+        assert len(dh.lines(0, 0)) == 0
+        duration = dh.duration
+        lines = dh.lines()
+        assert len(lines) > 0, \
+            '{} has no intervals'.format(documents[i].name)
+        length_from_intervals = 0
+        for line in lines:
+            length_from_intervals += line.len
+        assert math.fabs(lines[-1].end - duration) < 1e-6
+        assert length_from_intervals == dh.length, \
+            '{} has an inconsistent number of tokens'.format(
+            documents[i].name)
 
 
 def test_util_window():
@@ -194,7 +184,7 @@ def test_util_window():
 
 def test_frequent_words():
     idx_dir = os.path.join(TMP_DIR, TEST_INDEX_SUBDIR)
-    _, lexicon = _get_docs_and_lexicon(idx_dir)
+    _, lexicon = get_docs_and_lexicon(idx_dir)
     assert len(util.frequent_words(lexicon, 100)) == 1
     assert len(util.frequent_words(lexicon, 0)) == len(lexicon)
     assert len(util.frequent_words(lexicon, 99)) > 0

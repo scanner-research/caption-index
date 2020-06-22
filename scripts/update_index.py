@@ -61,23 +61,25 @@ def index_new_docs(
     assert len(new_docs_to_index) == len(new_documents)
 
     with Pool(processes=parallelism) as pool:
-        doc_out_paths = []
+        index_out_paths = []
+        data_out_paths = []
         worker_args = []
         for doc_to_index, doc in zip(new_docs_to_index, new_documents):
             assert doc_to_index.name == doc.name
             doc_index_out_path = os.path.join(
                 tmp_dir, '{:07d}.ind'.format(doc.id))
             doc_data_out_path = os.path.join(
-                tmp_dir, '{:07d}.bin'.format(doc.id))
+                tmp_dir, '{}.bin'.format(doc.id))
             worker_args.append((doc.id, doc_to_index.path, doc_index_out_path,
                                 doc_data_out_path))
-            doc_out_paths.append(doc_index_out_path, )
+            index_out_paths.append(doc_index_out_path)
+            data_out_paths.append(doc_data_out_path)
 
         for _ in tqdm(pool.imap_unordered(index_single_doc, worker_args),
                       desc='Indexing'):
             pass
 
-    return zip(*doc_out_paths)
+    return index_out_paths, data_out_paths
 
 
 def main(

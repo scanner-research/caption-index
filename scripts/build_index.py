@@ -86,7 +86,7 @@ def index_all_docs(
             doc_index_out_path = os.path.join(
                 tmp_dir, '{:07d}.bin'.format(doc.id))
             doc_data_out_path = os.path.join(
-                data_out_dir, '{:07d}.bin'.format(doc.id))
+                data_out_dir, '{}.bin'.format(doc.id))
             worker_args.append((doc.id, doc_to_index.path, doc_index_out_path,
                                 doc_data_out_path))
             doc_index_paths.append(doc_index_out_path)

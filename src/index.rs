@@ -4,7 +4,6 @@ use rayon::prelude::*;
 use pyo3::prelude::*;
 use pyo3::exceptions;
 use std::collections::BTreeMap;
-use std::cmp;
 use std::cmp::Ordering;
 use std::mem;
 use std::fs::{File, metadata, read_dir};
@@ -68,7 +67,7 @@ fn parse_index(m: &Mmap, file_num: usize, datum_size: usize,
     docs
 }
 
-struct _RsCaptionIndex {
+struct _RsCaptionIndexImpl {
     docs: BTreeMap<DocumentId, Document>,
     data: Vec<Mmap>,
     datum_size: usize,
@@ -76,7 +75,7 @@ struct _RsCaptionIndex {
     end_time_size: usize,
 }
 
-impl _RsCaptionIndex {
+impl _RsCaptionIndexImpl {
 
     fn time_int_size(&self) -> usize {
         self.start_time_size + self.end_time_size
@@ -96,7 +95,7 @@ impl _RsCaptionIndex {
         (start, start + diff)
     }
 
-    fn lookup_postings(&self, d: &Document, token: TokenId) -> Option<(usize, u32)> {
+    fn lookup_posting_offsets_one(&self, d: &Document, token: TokenId) -> Option<(usize, u32)> {
         let m = &self.data[d.file_num];
         let mut min_idx = 0;
         let mut max_idx = d.unique_token_count as usize;
@@ -127,7 +126,15 @@ impl _RsCaptionIndex {
         }
     }
 
-    fn read_postings(&self, d: &Document, idx: usize, n: u32) -> Vec<Posting> {
+    fn lookup_posting_offsets_many(&self, document: &Document, token: &Token) -> Option<Vec<(usize, u32)>> {
+        let posting_offsets: Vec<(usize, u32)> =
+            token.iter().filter_map(
+                |token_id| self.lookup_posting_offsets_one(document, *token_id)
+            ).collect();
+        if posting_offsets.len() == 0 { None } else { Some(posting_offsets) }
+    }
+
+    fn read_postings_one(&self, d: &Document, idx: usize, n: u32) -> Vec<Posting> {
         assert!((idx as u32) + n <= d.posting_count, "Index + n exceeds total postings");
         let m = &self.data[d.file_num];
         let time_int_size = self.time_int_size();
@@ -144,146 +151,140 @@ impl _RsCaptionIndex {
         postings
     }
 
-    // fn lookup_ngram_contains(
-    //     &self, ngram: &Vec<Token>, anchor_idx: usize, document: &Document
-    // ) -> bool {
-    //     let m = &self.data[document.file_num];
-    //     let base_index_ofs: usize = document.base_offset + document.inv_index_offset;
-    //     let time_int_size = self.time_int_size();
-    //     let posting_size = self.posting_size();
-    //     let ngram_len = ngram.len();
-    //
-    //     let anchor_idx_posting_offsets: Vec<(usize, u32)> =
-    //         ngram[anchor_idx].iter().filter_map(
-    //             |token| self.lookup_postings(document, *token)
-    //         ).collect();
-    //     if anchor_idx_posting_offsets.len() == 0 {
-    //         return false;    // None of the optons matched
-    //     }
-    //
-    //     for i in 0..anchor_idx_posting_offsets.len() {
-    //         let anchor_token_posting_idx = anchor_idx_posting_offsets[i].0;
-    //         let anchor_token_posting_count = anchor_idx_posting_offsets[i].1 as usize;
-    //
-    //         // Look for ngram around anchor index
-    //         for j in 0..anchor_token_posting_count {
-    //             let ngram_anchor_pos = self.read_datum(
-    //                 m,
-    //                 base_index_ofs + (anchor_token_posting_idx + j) * posting_size + time_int_size
-    //             ) as usize;
-    //
-    //             if ngram_anchor_pos < anchor_idx ||
-    //                ngram_anchor_pos - anchor_idx + ngram_len > document.length {
-    //                 continue;
-    //             }
-    //
-    //             // Check indices around anchor index
-    //             let ngram_base_pos = ngram_anchor_pos - anchor_idx;
-    //             if self.check_is_ngram(ngram, anchor_idx, document, ngram_base_pos) {
-    //                 return true;
-    //             }
-    //         }
-    //     }
-    //     false
-    // }
+    fn read_postings_many(
+        &self, document: &Document, posting_offsets: &Vec<(usize, u32)>
+    ) -> Vec<Posting> {
+        assert!(posting_offsets.len() > 0, "Must contain offsets");
+        if posting_offsets.len() == 1 {
+            self.read_postings_one(document, posting_offsets[0].0, posting_offsets[0].1)
+        } else {
+            // TODO: more efficient merge needed
+            let mut postings: Vec<Posting> = posting_offsets.iter().flat_map(
+                |p| self.read_postings_one(document, p.0, p.1)
+            ).collect();
+            postings.sort_by(|a, b| match a.0.partial_cmp(&b.0) {
+                Some(ord) => if ord == Ordering::Equal {a.2.cmp(&b.2) } else { ord }
+                None => a.2.cmp(&b.2)
+            });
+            postings
+        }
+    }
 
-    // fn lookup_and_load_ngrams(
-    //     &self, ngram: &Vec<Token>, anchor_idx: usize, document: &Document
-    // ) -> Option<Vec<Posting>> {
-    //     let m = &self.data[document.file_num];
-    //     let base_index_ofs: usize = document.base_offset + document.inv_index_offset;
-    //     let time_int_size = self.time_int_size();
-    //     let posting_size = self.posting_size();
-    //     let ngram_len = ngram.len();
-    //
-    //     let anchor_idx_posting_offsets: Vec<(usize, u32)> = ngram[anchor_idx].iter().filter_map(
-    //         |token| self.lookup_postings(document, *token)
-    //     ).collect();
-    //     if anchor_idx_posting_offsets.len() == 0 {
-    //         return None;    // None of the optons matched
-    //     }
-    //
-    //     let mut postings: Vec<Posting> = vec![];
-    //     let mut anchors_used = 0;
-    //     for i in 0..anchor_idx_posting_offsets.len() {
-    //         let mut anchor_used = false;
-    //         let anchor_token_posting_idx = anchor_idx_posting_offsets[i].0;
-    //         let anchor_token_posting_count = anchor_idx_posting_offsets[i].1 as usize;
-    //         let mut hint_time_int_idx: usize = 0;
-    //
-    //         // Look for ngram around anchor index
-    //         for j in 0..anchor_token_posting_count {
-    //             let ngram_anchor_pos = self.read_datum(
-    //                 m,
-    //                 base_index_ofs + (anchor_token_posting_idx + j) * posting_size + time_int_size
-    //             ) as usize;
-    //
-    //             if ngram_anchor_pos < anchor_idx ||
-    //                ngram_anchor_pos - anchor_idx + ngram_len > document.length {
-    //                 continue;
-    //             }
-    //
-    //             // Check indices around anchor index
-    //             let ngram_base_pos = ngram_anchor_pos - anchor_idx;
-    //             if self.check_is_ngram(&ngram, anchor_idx, document, ngram_base_pos) {
-    //                 // All other indices matched
-    //                 let ngram_anchor_time_int = self.read_time_int(
-    //                     m, base_index_ofs + (anchor_token_posting_idx + j) * posting_size);
-    //                 let start_ms = if anchor_idx != 0 {
-    //                     match self.lookup_time_int_by_idx(
-    //                         document, ngram_base_pos as u32, hint_time_int_idx
-    //                     ) {
-    //                         Some((new_hint_idx, ngram_start_time_int)) => {
-    //                             hint_time_int_idx = new_hint_idx;
-    //                             cmp::min(ngram_start_time_int.0, ngram_anchor_time_int.0)
-    //                         },
-    //                         None => ngram_anchor_time_int.0
-    //                     }
-    //                 } else {
-    //                     ngram_anchor_time_int.0
-    //                 };
-    //                 let end_ms = if anchor_idx + 1 == ngram_len {
-    //                     ngram_anchor_time_int.1
-    //                 } else {
-    //                     match self.lookup_time_int_by_idx(
-    //                         document, (ngram_base_pos + ngram_len - 1) as u32, hint_time_int_idx
-    //                     ) {
-    //                         Some((_, ngram_end_time_int)) => {
-    //                             cmp::max(ngram_end_time_int.1, ngram_anchor_time_int.1)
-    //                         },
-    //                         None => ngram_anchor_time_int.1
-    //                     }
-    //                 };
-    //
-    //                 postings.push((
-    //                     ms_to_s(start_ms), ms_to_s(end_ms), ngram_base_pos, ngram_len
-    //                 ));
-    //                 anchor_used |= true;
-    //             }
-    //         }
-    //
-    //         // Need to resort if multiple anchor words used
-    //         if anchor_used {
-    //             anchors_used += 1;
-    //         }
-    //     }
-    //     if postings.len() > 0 {
-    //         if anchors_used > 1 {
-    //             postings.sort_by(|a, b| match a.0.partial_cmp(&b.0) {
-    //                 Some(ord) => if ord == Ordering::Equal {a.2.cmp(&b.2)} else {ord}
-    //                 None => a.2.cmp(&b.2)
-    //             });
-    //         }
-    //         Some(postings)
-    //     } else {
-    //         None
-    //     }
-    // }
+    fn check_contains_ngram(
+        &self, ngram: &Vec<Token>, query_plan: &Vec<usize>, document: &Document
+    ) -> bool {
+        let ngram_len = ngram.len();
+        assert!(ngram_len > 1, "Ngram must have > 1 tokens");
+
+        let posting_offsets: Vec<Option<Vec<(usize, u32)>>> = ngram.iter().map(
+            |token| self.lookup_posting_offsets_many(document, token)
+        ).collect();
+
+        // One of the tokens is not present in the document
+        if posting_offsets.iter().any(|v| v.is_none()) {
+            return false;
+        }
+
+        let init_pos = query_plan[0];
+        let mut cand_idxs: Vec<usize> = self.read_postings_many(
+            document, posting_offsets[init_pos].as_ref().unwrap()
+        ).iter().filter_map(|p| {
+            if p.2 < init_pos { None } else { Some(p.2 - init_pos) }
+        }).collect();
+
+        for i in 1..ngram_len {
+            let pos = query_plan[i];
+            let postings = self.read_postings_many(document, posting_offsets[pos].as_ref().unwrap());
+            let postings_len = postings.len();
+            let mut postings_iter_idx = 0;
+
+            let mut new_cand_idxs = vec![];
+            for cand_iter_idx in 0..cand_idxs.len() {
+                let cand_idx = cand_idxs[cand_iter_idx];
+                let exp_idx = cand_idx + pos;
+                while postings_iter_idx < postings_len && postings[postings_iter_idx].2 < exp_idx {
+                    postings_iter_idx += 1;
+                }
+                if postings_iter_idx == postings_len {
+                    break;
+                }
+
+                let p2 = postings[postings_iter_idx];
+                if p2.2 == exp_idx {
+                    if i == ngram_len - 1 {
+                        return true;
+                    } else {
+                        new_cand_idxs.push(cand_idx);
+                    }
+                }
+            }
+            if new_cand_idxs.len() == 0 {
+                break;
+            }
+            cand_idxs = new_cand_idxs;
+        }
+        false
+    }
+
+    fn find_ngram_postings(
+        &self, ngram: &Vec<Token>, query_plan: &Vec<usize>, document: &Document
+    ) -> Option<Vec<Posting>> {
+        let ngram_len = ngram.len();
+
+        let posting_offsets: Vec<Option<Vec<(usize, u32)>>> = ngram.iter().map(
+            |token| self.lookup_posting_offsets_many(document, token)
+        ).collect();
+
+        // One of the tokens is not present in the document
+        if posting_offsets.iter().any(|v| v.is_none()) {
+            return None;
+        }
+
+        let init_pos = query_plan[0];
+        let mut postings1: Vec<Posting> = self.read_postings_many(
+            document, posting_offsets[init_pos].as_ref().unwrap()
+        ).iter().filter_map(|p| {
+            if p.2 < init_pos { None } else { Some((p.0, p.1, p.2 - init_pos, ngram_len)) }
+        }).collect();
+
+        for i in 1..ngram_len {
+            let pos = query_plan[i];
+            let postings2 = self.read_postings_many(document, posting_offsets[pos].as_ref().unwrap());
+            let postings2_len = postings2.len();
+            let mut posting2_iter_idx = 0;
+
+            let mut new_postings = vec![];
+            for postings1_iter_idx in 0..postings1.len() {
+                let p1 = postings1[postings1_iter_idx];
+                let exp_p2_idx = p1.2 + pos;
+                while posting2_iter_idx < postings2_len && postings2[posting2_iter_idx].2 < exp_p2_idx {
+                    posting2_iter_idx += 1;
+                }
+                if posting2_iter_idx == postings2_len {
+                    break;
+                }
+
+                let p2 = postings2[posting2_iter_idx];
+                if p2.2 == exp_p2_idx {
+                    new_postings.push((
+                        if p1.0 < p2.0 { p1.0 } else { p2.0 },  // min
+                        if p1.1 < p2.1 { p2.1 } else { p1.1 },  // max
+                        p1.2, ngram_len
+                    ))
+                }
+            }
+            if new_postings.len() == 0 {
+                return None
+            }
+            postings1 = new_postings;
+        }
+        Some(postings1)
+    }
 }
 
 #[pyclass]
 pub struct RsCaptionIndex {
-    _internal: _RsCaptionIndex,
+    _impl: _RsCaptionIndexImpl,
     debug: bool
 }
 
@@ -291,7 +292,7 @@ pub struct RsCaptionIndex {
 impl RsCaptionIndex {
 
     fn document_exists(&self, doc_id: DocumentId) -> PyResult<bool> {
-        Ok(self._internal.docs.get(&doc_id).is_some())
+        Ok(self._impl.docs.get(&doc_id).is_some())
     }
 
     fn unigram_search(
@@ -302,34 +303,18 @@ impl RsCaptionIndex {
             eprintln!("unigram search: [{:?}] in {} documents", unigram,
                       if doc_ids.len() > 0 {len_str.as_str()} else {"all"});
         }
+
         let lookup_and_read_postings = |d| {
-            let mut unique_unigrams = 0;
-            let mut postings: Vec<Posting> = unigram.iter().flat_map(
-                |token| match self._internal.lookup_postings(d, *token) {
-                    Some(p) => {
-                        unique_unigrams += 1;
-                        self._internal.read_postings(d, p.0, p.1)
-                    },
-                    None => Vec::new()
-                }
-            ).collect();
-            if postings.len() > 0 {
-                if unique_unigrams > 1 {
-                    postings.sort_by(|a, b| match a.0.partial_cmp(&b.0) {
-                        Some(ord) => if ord == Ordering::Equal {a.2.cmp(&b.2)} else {ord}
-                        None => a.2.cmp(&b.2)
-                    });
-                }
-                Some(postings)
-            } else {
-                None
+            match self._impl.lookup_posting_offsets_many(d, &unigram) {
+                None => None,
+                Some(pofs) => Some(self._impl.read_postings_many(d, &pofs))
             }
         };
         let docs_to_unigrams =
             if doc_ids.len() > 0 {
                 doc_ids.par_sort();
                 doc_ids.par_iter().filter_map(
-                    |id| match self._internal.docs.get(&id) {
+                    |id| match self._impl.docs.get(&id) {
                         None => None,
                         Some(d) => match lookup_and_read_postings(d) {
                             None => None,
@@ -338,7 +323,7 @@ impl RsCaptionIndex {
                     }
                 ).collect()
             } else {
-                self._internal.docs.par_iter().filter_map(
+                self._impl.docs.par_iter().filter_map(
                     |(id, d)| match lookup_and_read_postings(d) {
                         None => None,
                         Some(p) => Some((*id, p))
@@ -349,105 +334,94 @@ impl RsCaptionIndex {
     }
 
     fn unigram_contains(
-        &self, unigram: Token, doc_ids: Vec<DocumentId>
+        &self, unigram: Token, mut doc_ids: Vec<DocumentId>
     ) -> PyResult<Vec<DocumentId>> {
         if self.debug {
             let len_str = doc_ids.len().to_string();
             eprintln!("unigram contains: [{:?}] in {} documents", unigram,
                       if doc_ids.len() > 0 {len_str.as_str()} else {"all"});
         }
-        let has_unigram = |d| {
-            for i in 0..unigram.len() {
-                if self._internal.lookup_postings(d, unigram[i]).is_some() {
-                    return true;
-                }
-            }
-            false
-        };
+        let has_unigram = |d| unigram.iter().any(
+            |t| self._impl.lookup_posting_offsets_one(d, *t).is_some());
         let docs_w_token =
             if doc_ids.len() > 0 {
+                doc_ids.par_sort();
                 doc_ids.par_iter().filter_map(
-                    |id| match self._internal.docs.get(&id) {
+                    |id| match self._impl.docs.get(&id) {
                         None => None,
                         Some(d) => if has_unigram(d) {Some(*id)} else {None}
                     }
                 ).collect()
             } else {
-                self._internal.docs.par_iter().filter_map(
+                self._impl.docs.par_iter().filter_map(
                     |(id, d)| if has_unigram(d) {Some(*id)} else {None}
                 ).collect()
             };
         Ok(docs_w_token)
     }
 
-    // fn ngram_search(
-    //     &self, ngram: Vec<Token>, mut doc_ids: Vec<DocumentId>, anchor_idx: usize
-    // ) -> PyResult<Vec<(DocumentId, Vec<Posting>)>> {
-    //     if ngram.len() <= 1 {
-    //         Err(exceptions::ValueError::py_err("Ngram must have at least 2 tokens"))
-    //     } else {
-    //         if self.debug {
-    //             let len_str = doc_ids.len().to_string();
-    //             eprintln!("ngram search: {:?} in {} documents", ngram,
-    //                       if doc_ids.len() > 0 {len_str.as_str()} else {"all"});
-    //         }
-    //         let load_ngrams = |d: &Document| -> Option<Vec<Posting>> {
-    //             self._internal.lookup_and_load_ngrams(&ngram, anchor_idx, d)
-    //         };
-    //         let docs_to_ngrams =
-    //             if doc_ids.len() > 0 {
-    //                 doc_ids.par_sort();
-    //                 doc_ids.par_iter().filter_map(
-    //                     |id| match self._internal.docs.get(&id) {
-    //                         None => None,
-    //                         Some(d) => match load_ngrams(d) {
-    //                             None => None,
-    //                             Some(p) => Some((*id, p))
-    //                         }
-    //                     }
-    //                 ).collect()
-    //             } else {
-    //                 self._internal.docs.par_iter().filter_map(
-    //                     |(id, d)| match load_ngrams(d) {
-    //                         None => None,
-    //                         Some(p) => Some((*id, p))
-    //                     }
-    //                 ).collect()
-    //             };
-    //         Ok(docs_to_ngrams)
-    //     }
-    // }
-    //
-    // fn ngram_contains(
-    //     &self, ngram: Vec<Token>, doc_ids: Vec<DocumentId>, anchor_idx: usize
-    // ) -> PyResult<Vec<DocumentId>> {
-    //     if ngram.len() <= 1 {
-    //         Err(exceptions::ValueError::py_err("Ngram must have at least 2 tokens"))
-    //     } else {
-    //         if self.debug {
-    //             let len_str = doc_ids.len().to_string();
-    //             eprintln!("ngram contains: {:?} in {} documents", ngram,
-    //                       if doc_ids.len() > 0 {len_str.as_str()} else {"all"});
-    //         }
-    //         let has_ngram = |d: &Document| -> bool {
-    //             self._internal.lookup_ngram_contains(&ngram, anchor_idx, d)
-    //         };
-    //         let docs_w_ngram =
-    //             if doc_ids.len() > 0 {
-    //                 doc_ids.par_iter().filter_map(
-    //                     |id| match self._internal.docs.get(&id) {
-    //                          None => None,
-    //                          Some(d) => if has_ngram(d) {Some(*id)} else {None}
-    //                     }
-    //                 ).collect()
-    //             } else {
-    //                 self._internal.docs.par_iter().filter_map(
-    //                     |(id, d)| if has_ngram(d) {Some(*id)} else {None}
-    //                 ).collect()
-    //             };
-    //         Ok(docs_w_ngram)
-    //     }
-    // }
+    fn ngram_search(
+        &self, ngram: Vec<Token>, mut doc_ids: Vec<DocumentId>, query_plan: Vec<usize>
+    ) -> PyResult<Vec<(DocumentId, Vec<Posting>)>> {
+        if ngram.len() <= 1 {
+            Err(exceptions::ValueError::py_err("Ngram must have at least 2 tokens"))
+        } else {
+            if self.debug {
+                let len_str = doc_ids.len().to_string();
+                eprintln!("ngram search: {:?} in {} documents", ngram,
+                          if doc_ids.len() > 0 {len_str.as_str()} else {"all"});
+            }
+            let search_postings = |id, d| {
+                match self._impl.find_ngram_postings(&ngram, &query_plan, d) {
+                    None => None,
+                    Some(p) => Some((id, p))
+                }
+            };
+            let docs_to_ngrams =
+                if doc_ids.len() > 0 {
+                    doc_ids.par_sort();
+                    doc_ids.par_iter().filter_map(
+                        |id| match self._impl.docs.get(&id) {
+                            None => None,
+                            Some(d) => search_postings(*id, d)
+                        }
+                    ).collect()
+                } else {
+                    self._impl.docs.par_iter().filter_map(
+                        |(id, d)| search_postings(*id, d)
+                    ).collect()
+                };
+            Ok(docs_to_ngrams)
+        }
+    }
+
+    fn ngram_contains(
+        &self, ngram: Vec<Token>, mut doc_ids: Vec<DocumentId>, query_plan: Vec<usize>
+    ) -> PyResult<Vec<DocumentId>> {
+        if ngram.len() <= 1 {
+            Err(exceptions::ValueError::py_err("Ngram must have at least 2 tokens"))
+        } else {
+            if self.debug {
+                let len_str = doc_ids.len().to_string();
+                eprintln!("ngram contains: {:?} in {} documents", ngram,
+                          if doc_ids.len() > 0 {len_str.as_str()} else {"all"});
+            }
+            let has_ngram = |id, d| if self._impl.check_contains_ngram(&ngram, &query_plan, d) {
+                Some(id)
+            } else { None };
+            let docs_w_ngram =
+                if doc_ids.len() > 0 {
+                    doc_ids.par_sort();
+                    doc_ids.par_iter().filter_map(|id| match self._impl.docs.get(&id) {
+                         None => None,
+                         Some(d) => has_ngram(*id, d)
+                    }).collect()
+                } else {
+                    self._impl.docs.par_iter().filter_map(|(id, d)| has_ngram(*id, d)).collect()
+                };
+            Ok(docs_w_ngram)
+        }
+    }
 
     #[new]
     unsafe fn __new__(obj: &PyRawObject, index_path: String, datum_size: usize,
@@ -484,7 +458,7 @@ impl RsCaptionIndex {
         }
 
         obj.init(RsCaptionIndex {
-            _internal: _RsCaptionIndex {
+            _impl: _RsCaptionIndexImpl {
                 docs: docs, data: index_mmaps, datum_size: datum_size,
                 start_time_size: start_time_size, end_time_size: end_time_size
             },
