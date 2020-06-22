@@ -25,9 +25,6 @@ from lib.common import *
 
 DEFAULT_OUT_DIR = 'out'
 
-# Hack to get around sharing args beween processes workers
-WORKER_LEXICON = None
-
 
 def get_args():
     p = argparse.ArgumentParser()

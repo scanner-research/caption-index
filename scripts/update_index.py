@@ -22,10 +22,6 @@ from captions.tokenize import AlignmentTokenizer
 from lib.common import *
 
 
-# Hack to get around sharing args beween processes workers
-WORKER_LEXICON = None
-
-
 def get_args():
     p = argparse.ArgumentParser()
     p.add_argument('index_dir', type=str,
@@ -43,20 +39,29 @@ def get_args():
 
 def index_single_doc(args):
     doc_id, doc_path, index_out_path, data_out_path = args
-    index_document(doc_id, doc_path, WORKER_LEXICON, index_out_path,
+    index_document(doc_id, doc_path, index_single_doc.lexicon, index_out_path,
                    data_out_path, tokenizer=AlignmentTokenizer())
+index_single_doc.lexicon = None
+
+
+def init_worker(function, lexicon_path):
+    function.lexicon = Lexicon.load(lexicon_path)
 
 
 def index_new_docs(
         new_docs_to_index: List[DocumentToIndex],
         new_documents: Documents,
         tmp_dir: str,
+        lexicon_path: str,
         parallelism: int
 ):
     """Builds inverted indexes and reencode documents in binary"""
     assert len(new_docs_to_index) == len(new_documents)
 
-    with Pool(processes=parallelism) as pool:
+    with Pool(
+            processes=parallelism, initializer=init_worker,
+            initargs=(index_single_doc, lexicon_path)
+    ) as pool:
         index_out_paths = []
         data_out_paths = []
         worker_args = []
@@ -79,7 +84,8 @@ def index_new_docs(
 
 
 def main(
-        index_dir: str, new_doc_dir: Optional[str],
+        index_dir: str,
+        new_doc_dir: Optional[str],
         parallelism: int = DEFAULT_PARALLELISM,
         chunk_size: Optional[int] = None,
         skip_existing_names: bool = False
@@ -128,8 +134,8 @@ def main(
                 Lexicon.Word(len(lexicon_words), w, new_word_counts[w])
             )
 
-    global WORKER_LEXICON
-    WORKER_LEXICON = Lexicon(lexicon_words)
+    tmp_lex_path = os.path.join(index_dir, 'lexicon.tmp')
+    Lexicon(lexicon_words).store(tmp_lex_path)
 
     base_doc_id = len(documents)
     new_documents = [Documents.Document(id=i + base_doc_id, name=d.name)
@@ -141,7 +147,7 @@ def main(
         shutil.rmtree(tmp_dir)
     os.makedirs(tmp_dir)
     new_doc_index_paths, new_doc_data_paths = index_new_docs(
-        new_docs_to_index, new_documents, tmp_dir, parallelism)
+        new_docs_to_index, new_documents, tmp_dir, tmp_lex_path, parallelism)
 
     # Convert existing index.bin to a dirctory if needed
     if os.path.isfile(index_path):
@@ -181,9 +187,9 @@ def main(
     all_documents.extend(new_documents)
     Documents(all_documents).store(doc_path)
 
-    # Write out the new lexicon
+    # Update to the new lexicon
     shutil.move(lex_path, lex_path + '.old')
-    WORKER_LEXICON.store(lex_path)
+    shutil.move(tmp_lex_path, lex_path)
 
     print('Done!')
 

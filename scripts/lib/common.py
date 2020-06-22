@@ -3,7 +3,7 @@ from multiprocessing import Pool
 import os
 import sys
 from subprocess import check_call
-from typing import List, NamedTuple
+from typing import List, NamedTuple, Optional
 
 from tqdm import tqdm
 
@@ -64,9 +64,14 @@ def _get_batch_word_counts(doc_paths: List[str]):
 def get_word_counts(
         docs_to_index: List[DocumentToIndex],
         parallelism: int,
-        batch_size: int = 1000      # use batches to reduce serialization
+        batch_size: Optional[int] = None    # use batches to reduce
+                                            # communication overhead
 ) -> Counter:
     words = Counter()
+    if batch_size is None:
+        batch_size = int(len(docs_to_index) / 10 / os.cpu_count())
+        batch_size = min(max(batch_size, 1), 1000)
+    assert batch_size > 0
 
     batch_args = []
     for i in range(0, len(docs_to_index), batch_size):
