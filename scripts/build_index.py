@@ -67,8 +67,6 @@ def index_all_docs(
     """Builds inverted indexes and reencode documents in binary"""
     assert len(docs_to_index) == len(documents)
 
-    # tqdm(total=len(documents), desc='Indexing documents') as pbar, \
-
     with Pool(
             processes=parallelism, initializer=init_index_worker,
             initargs=(index_single_doc, lexicon_path)
