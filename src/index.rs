@@ -333,30 +333,17 @@ impl _RsCaptionIndexImpl {
     }
 }
 
-fn encode_postings(docs_to_postings: &Vec<(DocumentId, Vec<Posting>)>) -> Vec<u8> {
-    let posting_size: usize = 16;
-    let header_size: usize = 8;
-    let num_docs = docs_to_postings.len();
-    let num_postings: usize = docs_to_postings.iter().map(|x| x.1.len()).sum();
-    let buf_len: usize = 8 * num_docs + 16 * num_postings;
-    let mut buf = vec![0u8; buf_len];
+fn encode_postings(postings: &Vec<Posting>) -> Vec<u8> {
+    let posting_size: usize = 13;
+    let mut buf = vec![0u8; postings.len() * posting_size];
     let mut ofs = 0;
-    for i in 0..num_docs {
-        let dp = &docs_to_postings[i];
-        let d_num_postings = dp.1.len();
-        LittleEndian::write_u32(&mut buf[ofs..ofs + 4], dp.0);  // document id
-        LittleEndian::write_u32(
-            &mut buf[ofs + 4..ofs + 8],
-            (d_num_postings * posting_size) as u32);            // number of posting bytes
-        ofs += header_size;
-        for j in 0..d_num_postings {
-            let p = dp.1[j];
-            LittleEndian::write_f32(&mut buf[ofs..ofs + 4], ms_to_s(p.0));      // start
-            LittleEndian::write_f32(&mut buf[ofs + 4..ofs + 8], ms_to_s(p.1));  // end
-            LittleEndian::write_u32(&mut buf[ofs + 8..ofs + 12], p.2);          // position
-            LittleEndian::write_u32(&mut buf[ofs + 12..ofs + 16], p.3);         // len
-            ofs += posting_size;
-        }
+    for i in 0..postings.len() {
+        let p = postings[i];
+        LittleEndian::write_f32(&mut buf[ofs..ofs + 4], ms_to_s(p.0));      // start
+        LittleEndian::write_f32(&mut buf[ofs + 4..ofs + 8], ms_to_s(p.1));  // end
+        LittleEndian::write_u32(&mut buf[ofs + 8..ofs + 12], p.2);          // position
+        buf[ofs + 12] = p.3 as u8;                                          // len
+        ofs += posting_size;
     }
     buf
 }
@@ -376,42 +363,37 @@ impl RsCaptionIndex {
 
     fn unigram_search<'p>(
         &self, py: Python<'p>, unigram: Token, mut doc_ids: Vec<DocumentId>
-    ) -> &'p PyBytes {
+    ) -> Vec<(DocumentId, &'p PyBytes)> {
         if self.debug {
             let len_str = doc_ids.len().to_string();
             eprintln!("unigram search: [{:?}] in {} documents", unigram,
                       if doc_ids.len() > 0 {len_str.as_str()} else {"all"});
         }
 
-        let lookup_and_read_postings = |d| {
+        let lookup_and_read_postings = |id, d| {
             match self._impl.lookup_posting_offsets_many(d, &unigram) {
                 None => None,
-                Some(pofs) => Some(self._impl.read_postings_many(d, &pofs))
+                Some(pofs) => Some({
+                    let postings = self._impl.read_postings_many(d, &pofs);
+                    (id, PyBytes::new(py, &encode_postings(&postings)))
+                })
             }
         };
-        let docs_to_unigrams: Vec<(DocumentId, Vec<Posting>)> =
+        let docs_to_unigrams =
             if doc_ids.len() > 0 {
                 doc_ids.sort();
                 doc_ids.iter().filter_map(
                     |id| match self._impl.docs.get(&id) {
                         None => None,
-                        Some(d) => match lookup_and_read_postings(d) {
-                            None => None,
-                            Some(p) => Some((*id, p))
-                        }
+                        Some(d) => lookup_and_read_postings(*id, d)
                     }
                 ).collect()
             } else {
                 self._impl.docs.iter().filter_map(
-                    |(id, d)| match lookup_and_read_postings(d) {
-                        None => None,
-                        Some(p) => Some((*id, p))
-                    }
+                    |(id, d)| lookup_and_read_postings(*id, d)
                 ).collect()
             };
-
-        // Do separately for thread safety
-        PyBytes::new(py, &encode_postings(&docs_to_unigrams))
+        docs_to_unigrams
     }
 
     fn unigram_contains(
@@ -422,28 +404,27 @@ impl RsCaptionIndex {
             eprintln!("unigram contains: [{:?}] in {} documents", unigram,
                       if doc_ids.len() > 0 {len_str.as_str()} else {"all"});
         }
-        let has_unigram = |d| unigram.iter().any(
-            |t| self._impl.lookup_posting_offsets_one(d, *t).is_some());
+        let has_unigram = |id, d| if unigram.iter().any(
+            |t| self._impl.lookup_posting_offsets_one(d, *t).is_some()
+        ) {Some(id)} else {None};
         let docs_w_token =
             if doc_ids.len() > 0 {
                 doc_ids.sort();
                 doc_ids.iter().filter_map(
                     |id| match self._impl.docs.get(&id) {
                         None => None,
-                        Some(d) => if has_unigram(d) {Some(*id)} else {None}
+                        Some(d) => has_unigram(*id, d)
                     }
                 ).collect()
             } else {
-                self._impl.docs.iter().filter_map(
-                    |(id, d)| if has_unigram(d) {Some(*id)} else {None}
-                ).collect()
+                self._impl.docs.iter().filter_map(|(id, d)| has_unigram(*id, d)).collect()
             };
         docs_w_token
     }
 
     fn ngram_search<'p>(
         &self, py: Python<'p>, ngram: Vec<Token>, mut doc_ids: Vec<DocumentId>, query_plan: Vec<usize>
-    ) -> &'p PyBytes {
+    ) -> Vec<(DocumentId, &'p PyBytes)> {
         assert!(ngram.len() > 1, "Unigrams should be searched with unigram_search()");
         if self.debug {
             let len_str = doc_ids.len().to_string();
@@ -453,10 +434,10 @@ impl RsCaptionIndex {
         let search_postings = |id, d| {
             match self._impl.find_ngram_postings(&ngram, &query_plan, d) {
                 None => None,
-                Some(p) => Some((id, p))
+                Some(p) => Some((id, PyBytes::new(py, &encode_postings(&p))))
             }
         };
-        let docs_to_ngrams: Vec<(DocumentId, Vec<Posting>)> =
+        let docs_to_ngrams =
             if doc_ids.len() > 0 {
                 doc_ids.sort();
                 doc_ids.iter().filter_map(
@@ -470,9 +451,7 @@ impl RsCaptionIndex {
                     |(id, d)| search_postings(*id, d)
                 ).collect()
             };
-
-        // Do separately for thread safety
-        PyBytes::new(py, &encode_postings(&docs_to_ngrams))
+        docs_to_ngrams
     }
 
     fn ngram_contains(

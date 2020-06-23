@@ -6,8 +6,9 @@ import os
 import csv
 import struct
 from abc import ABC
+import collections.abc
 from typing import (Iterable, List, Set, Tuple, NamedTuple,
-                    Union, Optional, Generator)
+                    Union, Optional, Generator, Sequence)
 
 from .lemmatize import default_lemmatizer
 from .tokenize import default_tokenizer, Tokenizer
@@ -16,6 +17,9 @@ from .rs_captions import RsCaptionIndex, RsDocumentData  # type: ignore
 WordIdOrString = Union[str, int]
 WordIdOrWord = Union[int, 'Lexicon.Word']
 OneOrMoreWords = Union[WordIdOrWord, List[WordIdOrWord]]
+
+# Arbirtary limit on longest ngram the system will search for
+MAX_NGRAM_LEN = 32
 
 
 class Lexicon:
@@ -404,8 +408,8 @@ class CaptionIndex(_BaseIndex):
 
     # Document object with postings
     class Document(NamedTuple):
-        id: int                                 # Document id
-        postings: List['CaptionIndex.Posting']  # List of locations
+        id: int                                     # Document id
+        postings: Sequence['CaptionIndex.Posting']  # Sequence of locations
 
     def __init__(
             self,
@@ -471,6 +475,8 @@ class CaptionIndex(_BaseIndex):
         if len(other_words) == 0:
             result = self._rs_index.unigram_search(
                 [w.id for w in self._to_words(first_word)], doc_ids)
+        elif len(other_words) > MAX_NGRAM_LEN - 1:
+            raise RuntimeError('Ngram too long')
         else:
             ngram_word_ids, query_plan = self.__get_ngram_ids_and_query_plan(
                 [first_word, *other_words])
@@ -508,6 +514,8 @@ class CaptionIndex(_BaseIndex):
         if len(other_words) == 0:
             result = self._rs_index.unigram_contains(
                 [w.id for w in self._to_words(first_word)], doc_ids)
+        elif len(other_words) > MAX_NGRAM_LEN - 1:
+            raise RuntimeError('Ngram too long')
         else:
             ngram_word_ids, query_plan = self.__get_ngram_ids_and_query_plan(
                 [first_word, *other_words])
@@ -542,17 +550,40 @@ class CaptionIndex(_BaseIndex):
             raise ValueError('No tokens in input')
         return tokens
 
-    def __unpack_rs_search(self, bin_result) -> Generator:
-        offset = 0
-        while offset < len(bin_result):
-            doc_id, payload_len = struct.unpack_from('<II', bin_result, offset)
-            offset += 8
+    def __unpack_rs_search(self, result) -> Generator:
+        for doc_id, bin_data in result:
             yield CaptionIndex.Document(
-                id=doc_id, postings=[
-                    CaptionIndex.Posting(*p) for p in struct.iter_unpack(
-                        '<ffII', bin_result[offset:offset + payload_len])
-                ])
-            offset += payload_len
+                id=doc_id, postings=CaptionIndex._PostingList(bin_data))
+
+    class _PostingList(collections.abc.Sequence):
+
+        def __init__(self, bin_data: bytes):
+            self._bin_data = bin_data
+            self._data = None
+
+        def __len__(self):
+            return int(len(self._bin_data) / 13)
+
+        def __getitem__(self, i: int) -> 'CaptionIndex.Posting':
+            if self._data is None:
+                self._data = self.__load()
+            return self._data[i]
+
+        def __iter__(self) -> Iterable['CaptionIndex.Posting']:
+            if self._data is None:
+                self._data = self.__load()
+            return iter(self._data)
+
+        def __lt__(self, other):
+            if self._data is None:
+                self._data = self.__load()
+            if other._data is None:
+                other._data = other.__load()
+            return self._data < other._data
+
+        def __load(self):
+            return [CaptionIndex.Posting(*p)
+                    for p in struct.iter_unpack('<ffIB', self._bin_data)]
 
 
 class BinaryFormat:
