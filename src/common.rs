@@ -9,10 +9,8 @@ pub type TokenId = u32;
 pub type Token = Vec<TokenId>;
 pub type Seconds = f32;
 pub type Millis = u32;
-pub type Position = usize;
+pub type Position = u32;
 
-// Start, End, Position, Length
-pub type Posting = (Seconds, Seconds, Position, usize);
 
 #[inline]
 pub fn ms_to_s(ms: Millis) -> Seconds {

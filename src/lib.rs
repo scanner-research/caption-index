@@ -1,6 +1,5 @@
 #![feature(specialization)]
 
-extern crate rayon;
 extern crate rand;
 extern crate pyo3;
 extern crate memmap;

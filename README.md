@@ -30,8 +30,10 @@ These are:
   - `data/`
 
 Note that if you set ran the indexer with the `--chunk-size` set, then
-`index.bin` will be a directory containing the index files. `data` is a
-directory containing binary encoded caption.
+`index.bin` will be a directory containing the index files.
+
+`data` is a directory containing binary encoded captions, one per file, and
+named by the document id. Do not manually rename these files!
 
 #### Updating an index
 

@@ -32,6 +32,9 @@ struct _RsDocumentDataImpl {
     m: Mmap
 }
 
+// Start, End, Position, Length
+type Line = (Seconds, Seconds, Position, u32);
+
 impl _RsDocumentDataImpl {
 
     fn time_int_size(&self) -> usize {
@@ -87,19 +90,19 @@ pub struct RsDocumentData {
 #[pymethods]
 impl RsDocumentData {
 
-    fn id(&self) -> PyResult<usize> {
-        Ok(self._impl.id)
+    fn id(&self) -> usize {
+        self._impl.id
     }
 
-    fn length(&self) -> PyResult<usize> {
-        Ok(self._impl.length)
+    fn length(&self) -> usize {
+        self._impl.length
     }
 
-    fn duration(&self) -> PyResult<f32> {
-        Ok(ms_to_s(self._impl.duration))
+    fn duration(&self) -> f32 {
+        ms_to_s(self._impl.duration)
     }
 
-    fn tokens(&self, position: usize, n: usize) -> PyResult<Vec<TokenId>> {
+    fn tokens(&self, position: usize, n: usize) -> Vec<TokenId> {
         if self.debug {
             eprintln!("tokens: {}+{}", position, n);
         }
@@ -110,10 +113,10 @@ impl RsDocumentData {
             let ofs = pos * self._impl.datum_size + self._impl.tokens_offset;
             tokens.push(self._impl.read_datum(ofs));
         }
-        Ok(tokens)
+        tokens
     }
 
-    fn intervals(&self, start: Seconds, end: Seconds) ->  PyResult<Vec<Posting>> {
+    fn intervals(&self, start: Seconds, end: Seconds) ->  PyResult<Vec<Line>> {
         if self.debug {
             eprintln!("intervals: {}s to {}s", start, end);
         }
@@ -143,10 +146,10 @@ impl RsDocumentData {
                     let time_int = self._impl.read_time_int(ofs);
                     if cmp::min(end_ms, time_int.1) >= cmp::max(start_ms, time_int.0) {
                         // Non-zero overlap
-                        let pos = self._impl.read_datum(ofs + time_int_size) as usize;
-                        let next_pos: usize = if i + 1 < (time_int_count as usize) {
-                            self._impl.read_datum(ofs + posting_size + time_int_size) as usize
-                        } else {length};
+                        let pos = self._impl.read_datum(ofs + time_int_size);
+                        let next_pos = if i + 1 < (time_int_count as usize) {
+                            self._impl.read_datum(ofs + posting_size + time_int_size)
+                        } else {length as u32};
                         assert!(next_pos >= pos, "postions are not non-decreasing");
                         locations.push(
                             (ms_to_s(time_int.0), ms_to_s(time_int.1), pos, next_pos - pos))
@@ -161,7 +164,7 @@ impl RsDocumentData {
         Ok(locations)
     }
 
-    fn position(&self, time: Seconds) -> PyResult<Position> {
+    fn position(&self, time: Seconds) -> Position {
         if self.debug {
             eprintln!("position: {}s", time);
         }
@@ -169,16 +172,16 @@ impl RsDocumentData {
             Some(idx) => {
                 let ofs = self._impl.time_index_offset +
                     idx * self._impl.posting_size() + self._impl.time_int_size();
-                Ok(self._impl.read_datum(ofs) as Position)
+                self._impl.read_datum(ofs) as Position
             },
-            None => Ok(self._impl.length as Position)
+            None => self._impl.length as Position
         }
     }
 
     #[new]
-    unsafe fn __new__(obj: &PyRawObject, id: usize, data_path: String, datum_size: usize,
-                      start_time_size: usize, end_time_size: usize, debug: bool
-    ) -> PyResult<()> {
+    unsafe fn new(id: usize, data_path: String, datum_size: usize,
+                  start_time_size: usize, end_time_size: usize, debug: bool
+    ) -> PyResult<Self> {
         let m: Mmap = MmapOptions::new().map(&File::open(&data_path).unwrap()).unwrap();
 
         let u32_size = mem::size_of::<u32>();
@@ -203,7 +206,7 @@ impl RsDocumentData {
 
         assert!(total_len == m.len(), "Incorrect byte offsets");
 
-        obj.init(RsDocumentData {
+        Ok(RsDocumentData {
             _impl: _RsDocumentDataImpl {
                 id: doc_id, duration: duration,
                 time_index_offset: time_index_offset, time_int_count: time_int_count,
@@ -212,7 +215,6 @@ impl RsDocumentData {
                 end_time_size: end_time_size, m: m
             },
             debug: debug
-        });
-        Ok(())
+        })
     }
 }

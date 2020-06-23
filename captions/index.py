@@ -4,6 +4,7 @@ Indexes for srt files
 
 import os
 import csv
+import struct
 from abc import ABC
 from typing import (Iterable, List, Set, Tuple, NamedTuple,
                     Union, Optional, Generator)
@@ -512,7 +513,8 @@ class CaptionIndex(_BaseIndex):
                 [first_word, *other_words])
             result = self._rs_index.ngram_contains(
                 ngram_word_ids, doc_ids, query_plan)
-        return set(result)
+        assert isinstance(result, set)
+        return result
 
     def close(self) -> None:
         self._rs_index = None
@@ -540,11 +542,17 @@ class CaptionIndex(_BaseIndex):
             raise ValueError('No tokens in input')
         return tokens
 
-    def __unpack_rs_search(self, result) -> Generator:
-        for doc_id, postings in result:
+    def __unpack_rs_search(self, bin_result) -> Generator:
+        offset = 0
+        while offset < len(bin_result):
+            doc_id, payload_len = struct.unpack_from('<II', bin_result, offset)
+            offset += 8
             yield CaptionIndex.Document(
                 id=doc_id, postings=[
-                    CaptionIndex.Posting(*p) for p in postings])
+                    CaptionIndex.Posting(*p) for p in struct.iter_unpack(
+                        '<ffII', bin_result[offset:offset + payload_len])
+                ])
+            offset += payload_len
 
 
 class BinaryFormat:

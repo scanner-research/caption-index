@@ -1,9 +1,11 @@
 /* Memory mapped caption index */
 
-use rayon::prelude::*;
 use pyo3::prelude::*;
 use pyo3::exceptions;
-use std::collections::{BTreeMap, BinaryHeap};
+use pyo3::types::PyBytes;
+use byteorder::{ByteOrder, LittleEndian};
+use std::collections::{BTreeMap, BinaryHeap, HashSet};
+use std::cmp;
 use std::cmp::Ordering;
 use std::mem;
 use std::fs::{File, metadata, read_dir};
@@ -26,6 +28,9 @@ struct Document {
     inv_index_offset: usize,
     posting_count: u32,
 }
+
+// Start, End, Position, Length
+type Posting = (Millis, Millis, Position, u32);
 
 fn parse_index(m: &Mmap, file_num: usize, datum_size: usize,
                start_time_size: usize, end_time_size: usize, debug: bool
@@ -67,18 +72,10 @@ fn parse_index(m: &Mmap, file_num: usize, datum_size: usize,
     docs
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Eq, PartialEq)]
 struct HeapPosting {
     posting: Posting,
     origin: usize
-}
-
-impl Eq for HeapPosting {}
-
-impl PartialEq for HeapPosting {
-    fn eq(&self, other: &Self) -> bool {
-        self.posting.2 == other.posting.2 && self.origin == other.origin
-    }
 }
 
 impl Ord for HeapPosting {
@@ -171,8 +168,8 @@ impl _RsCaptionIndexImpl {
         for i in 0..(n as usize) {
             let ofs = (idx + i) * posting_size + base_ofs;
             let time_int = self.read_time_int(m, ofs);
-            let pos = self.read_datum(m, ofs + time_int_size) as usize;
-            postings.push((ms_to_s(time_int.0), ms_to_s(time_int.1), pos, 1))
+            let pos = self.read_datum(m, ofs + time_int_size);
+            postings.push((time_int.0, time_int.1, pos, 1))
         }
         postings
     }
@@ -192,8 +189,8 @@ impl _RsCaptionIndexImpl {
             let read_single_posting = |idx| {
                 let ofs = idx * posting_size + base_ofs;
                 let time_int = self.read_time_int(m, ofs);
-                let pos = self.read_datum(m, ofs + time_int_size) as usize;
-                (ms_to_s(time_int.0), ms_to_s(time_int.1), pos, 1)
+                let pos = self.read_datum(m, ofs + time_int_size);
+                (time_int.0, time_int.1, pos, 1)
             };
 
             let mut iter_idxs = vec![0u32; posting_offsets.len()];
@@ -238,10 +235,10 @@ impl _RsCaptionIndexImpl {
         }
 
         let init_pos = query_plan[0];
-        let mut cand_idxs: Vec<usize> = self.read_postings_many(
+        let mut cand_idxs: Vec<Position> = self.read_postings_many(
             document, posting_offsets[init_pos].as_ref().unwrap()
         ).iter().filter_map(|p| {
-            if p.2 < init_pos { None } else { Some(p.2 - init_pos) }
+            if p.2 < init_pos as u32 { None } else { Some(p.2 - init_pos as u32) }
         }).collect();
 
         // Check candidate indices with postings at each position in the order of the query plan
@@ -254,7 +251,7 @@ impl _RsCaptionIndexImpl {
             let mut new_cand_idxs = vec![];
             for cand_iter_idx in 0..cand_idxs.len() {
                 let cand_idx = cand_idxs[cand_iter_idx];
-                let exp_idx = cand_idx + pos;
+                let exp_idx = cand_idx + pos as u32;
                 while postings_iter_idx < postings_len && postings[postings_iter_idx].2 < exp_idx {
                     postings_iter_idx += 1;
                 }
@@ -297,7 +294,9 @@ impl _RsCaptionIndexImpl {
         let mut postings1: Vec<Posting> = self.read_postings_many(
             document, posting_offsets[init_pos].as_ref().unwrap()
         ).iter().filter_map(|p| {
-            if p.2 < init_pos { None } else { Some((p.0, p.1, p.2 - init_pos, ngram_len)) }
+            if p.2 < init_pos as u32 { None } else {
+                Some((p.0, p.1, p.2 - init_pos as u32, ngram_len as u32))
+            }
         }).collect();
 
         // Merge lists of postings in a pairwise manner according to the query plan
@@ -311,7 +310,7 @@ impl _RsCaptionIndexImpl {
             let mut new_postings = vec![];
             for postings1_iter_idx in 0..postings1.len() {
                 let p1 = postings1[postings1_iter_idx];
-                let exp_p2_idx = p1.2 + pos;
+                let exp_p2_idx = p1.2 + pos as u32;
                 while posting2_iter_idx < postings2_len && postings2[posting2_iter_idx].2 < exp_p2_idx {
                     posting2_iter_idx += 1;
                 }
@@ -321,11 +320,8 @@ impl _RsCaptionIndexImpl {
 
                 let p2 = postings2[posting2_iter_idx];
                 if p2.2 == exp_p2_idx {
-                    new_postings.push((
-                        if p1.0 < p2.0 { p1.0 } else { p2.0 },  // min
-                        if p1.1 < p2.1 { p2.1 } else { p1.1 },  // max
-                        p1.2, ngram_len
-                    ))
+                    new_postings.push((cmp::min(p1.0, p2.0), cmp::max(p1.1, p2.1),
+                                       p1.2, ngram_len as u32))
                 }
             }
             if new_postings.len() == 0 {
@@ -337,6 +333,34 @@ impl _RsCaptionIndexImpl {
     }
 }
 
+fn encode_postings(docs_to_postings: &Vec<(DocumentId, Vec<Posting>)>) -> Vec<u8> {
+    let posting_size: usize = 16;
+    let header_size: usize = 8;
+    let num_docs = docs_to_postings.len();
+    let num_postings: usize = docs_to_postings.iter().map(|x| x.1.len()).sum();
+    let buf_len: usize = 8 * num_docs + 16 * num_postings;
+    let mut buf = vec![0u8; buf_len];
+    let mut ofs = 0;
+    for i in 0..num_docs {
+        let dp = &docs_to_postings[i];
+        let d_num_postings = dp.1.len();
+        LittleEndian::write_u32(&mut buf[ofs..ofs + 4], dp.0);  // document id
+        LittleEndian::write_u32(
+            &mut buf[ofs + 4..ofs + 8],
+            (d_num_postings * posting_size) as u32);            // number of posting bytes
+        ofs += header_size;
+        for j in 0..d_num_postings {
+            let p = dp.1[j];
+            LittleEndian::write_f32(&mut buf[ofs..ofs + 4], ms_to_s(p.0));      // start
+            LittleEndian::write_f32(&mut buf[ofs + 4..ofs + 8], ms_to_s(p.1));  // end
+            LittleEndian::write_u32(&mut buf[ofs + 8..ofs + 12], p.2);          // position
+            LittleEndian::write_u32(&mut buf[ofs + 12..ofs + 16], p.3);         // len
+            ofs += posting_size;
+        }
+    }
+    buf
+}
+
 #[pyclass]
 pub struct RsCaptionIndex {
     _impl: _RsCaptionIndexImpl,
@@ -346,13 +370,13 @@ pub struct RsCaptionIndex {
 #[pymethods]
 impl RsCaptionIndex {
 
-    fn document_exists(&self, doc_id: DocumentId) -> PyResult<bool> {
-        Ok(self._impl.docs.get(&doc_id).is_some())
+    fn document_exists(&self, doc_id: DocumentId) -> bool {
+        self._impl.docs.get(&doc_id).is_some()
     }
 
-    fn unigram_search(
-        &self, unigram: Token, mut doc_ids: Vec<DocumentId>
-    ) -> PyResult<Vec<(DocumentId, Vec<Posting>)>> {
+    fn unigram_search<'p>(
+        &self, py: Python<'p>, unigram: Token, mut doc_ids: Vec<DocumentId>
+    ) -> &'p PyBytes {
         if self.debug {
             let len_str = doc_ids.len().to_string();
             eprintln!("unigram search: [{:?}] in {} documents", unigram,
@@ -365,10 +389,10 @@ impl RsCaptionIndex {
                 Some(pofs) => Some(self._impl.read_postings_many(d, &pofs))
             }
         };
-        let docs_to_unigrams =
+        let docs_to_unigrams: Vec<(DocumentId, Vec<Posting>)> =
             if doc_ids.len() > 0 {
-                doc_ids.par_sort();
-                doc_ids.par_iter().filter_map(
+                doc_ids.sort();
+                doc_ids.iter().filter_map(
                     |id| match self._impl.docs.get(&id) {
                         None => None,
                         Some(d) => match lookup_and_read_postings(d) {
@@ -378,19 +402,21 @@ impl RsCaptionIndex {
                     }
                 ).collect()
             } else {
-                self._impl.docs.par_iter().filter_map(
+                self._impl.docs.iter().filter_map(
                     |(id, d)| match lookup_and_read_postings(d) {
                         None => None,
                         Some(p) => Some((*id, p))
                     }
                 ).collect()
             };
-        Ok(docs_to_unigrams)
+
+        // Do separately for thread safety
+        PyBytes::new(py, &encode_postings(&docs_to_unigrams))
     }
 
     fn unigram_contains(
         &self, unigram: Token, mut doc_ids: Vec<DocumentId>
-    ) -> PyResult<Vec<DocumentId>> {
+    ) -> HashSet<DocumentId> {
         if self.debug {
             let len_str = doc_ids.len().to_string();
             eprintln!("unigram contains: [{:?}] in {} documents", unigram,
@@ -400,88 +426,84 @@ impl RsCaptionIndex {
             |t| self._impl.lookup_posting_offsets_one(d, *t).is_some());
         let docs_w_token =
             if doc_ids.len() > 0 {
-                doc_ids.par_sort();
-                doc_ids.par_iter().filter_map(
+                doc_ids.sort();
+                doc_ids.iter().filter_map(
                     |id| match self._impl.docs.get(&id) {
                         None => None,
                         Some(d) => if has_unigram(d) {Some(*id)} else {None}
                     }
                 ).collect()
             } else {
-                self._impl.docs.par_iter().filter_map(
+                self._impl.docs.iter().filter_map(
                     |(id, d)| if has_unigram(d) {Some(*id)} else {None}
                 ).collect()
             };
-        Ok(docs_w_token)
+        docs_w_token
     }
 
-    fn ngram_search(
-        &self, ngram: Vec<Token>, mut doc_ids: Vec<DocumentId>, query_plan: Vec<usize>
-    ) -> PyResult<Vec<(DocumentId, Vec<Posting>)>> {
-        if ngram.len() <= 1 {
-            Err(exceptions::ValueError::py_err("Ngram must have at least 2 tokens"))
-        } else {
-            if self.debug {
-                let len_str = doc_ids.len().to_string();
-                eprintln!("ngram search: {:?} in {} documents", ngram,
-                          if doc_ids.len() > 0 {len_str.as_str()} else {"all"});
-            }
-            let search_postings = |id, d| {
-                match self._impl.find_ngram_postings(&ngram, &query_plan, d) {
-                    None => None,
-                    Some(p) => Some((id, p))
-                }
-            };
-            let docs_to_ngrams =
-                if doc_ids.len() > 0 {
-                    doc_ids.par_sort();
-                    doc_ids.par_iter().filter_map(
-                        |id| match self._impl.docs.get(&id) {
-                            None => None,
-                            Some(d) => search_postings(*id, d)
-                        }
-                    ).collect()
-                } else {
-                    self._impl.docs.par_iter().filter_map(
-                        |(id, d)| search_postings(*id, d)
-                    ).collect()
-                };
-            Ok(docs_to_ngrams)
+    fn ngram_search<'p>(
+        &self, py: Python<'p>, ngram: Vec<Token>, mut doc_ids: Vec<DocumentId>, query_plan: Vec<usize>
+    ) -> &'p PyBytes {
+        assert!(ngram.len() > 1, "Unigrams should be searched with unigram_search()");
+        if self.debug {
+            let len_str = doc_ids.len().to_string();
+            eprintln!("ngram search: {:?} in {} documents", ngram,
+                      if doc_ids.len() > 0 {len_str.as_str()} else {"all"});
         }
+        let search_postings = |id, d| {
+            match self._impl.find_ngram_postings(&ngram, &query_plan, d) {
+                None => None,
+                Some(p) => Some((id, p))
+            }
+        };
+        let docs_to_ngrams: Vec<(DocumentId, Vec<Posting>)> =
+            if doc_ids.len() > 0 {
+                doc_ids.sort();
+                doc_ids.iter().filter_map(
+                    |id| match self._impl.docs.get(&id) {
+                        None => None,
+                        Some(d) => search_postings(*id, d)
+                    }
+                ).collect()
+            } else {
+                self._impl.docs.iter().filter_map(
+                    |(id, d)| search_postings(*id, d)
+                ).collect()
+            };
+
+        // Do separately for thread safety
+        PyBytes::new(py, &encode_postings(&docs_to_ngrams))
     }
 
     fn ngram_contains(
         &self, ngram: Vec<Token>, mut doc_ids: Vec<DocumentId>, query_plan: Vec<usize>
-    ) -> PyResult<Vec<DocumentId>> {
-        if ngram.len() <= 1 {
-            Err(exceptions::ValueError::py_err("Ngram must have at least 2 tokens"))
-        } else {
-            if self.debug {
-                let len_str = doc_ids.len().to_string();
-                eprintln!("ngram contains: {:?} in {} documents", ngram,
-                          if doc_ids.len() > 0 {len_str.as_str()} else {"all"});
-            }
-            let has_ngram = |id, d| if self._impl.check_contains_ngram(&ngram, &query_plan, d) {
-                Some(id)
-            } else { None };
-            let docs_w_ngram =
-                if doc_ids.len() > 0 {
-                    doc_ids.par_sort();
-                    doc_ids.par_iter().filter_map(|id| match self._impl.docs.get(&id) {
-                         None => None,
-                         Some(d) => has_ngram(*id, d)
-                    }).collect()
-                } else {
-                    self._impl.docs.par_iter().filter_map(|(id, d)| has_ngram(*id, d)).collect()
-                };
-            Ok(docs_w_ngram)
+    ) -> HashSet<DocumentId> {
+        assert!(ngram.len() > 1, "Unigrams should be searched with unigram_contains()");
+        if self.debug {
+            let len_str = doc_ids.len().to_string();
+            eprintln!("ngram contains: {:?} in {} documents", ngram,
+                      if doc_ids.len() > 0 {len_str.as_str()} else {"all"});
         }
+        let has_ngram = |id, d| if self._impl.check_contains_ngram(&ngram, &query_plan, d) {
+            Some(id)
+        } else { None };
+        let docs_w_ngram =
+            if doc_ids.len() > 0 {
+                doc_ids.sort();
+                doc_ids.iter().filter_map(|id| match self._impl.docs.get(&id) {
+                     None => None,
+                     Some(d) => has_ngram(*id, d)
+                }).collect()
+            } else {
+                self._impl.docs.iter().filter_map(|(id, d)| has_ngram(*id, d)).collect()
+            };
+        docs_w_ngram
     }
 
     #[new]
-    unsafe fn __new__(obj: &PyRawObject, index_path: String, datum_size: usize,
-                      start_time_size: usize, end_time_size: usize, debug: bool
-    ) -> PyResult<()> {
+    unsafe fn new(index_path: String, datum_size: usize,
+                  start_time_size: usize, end_time_size: usize, debug: bool
+    ) -> PyResult<Self> {
         let mut index_files = vec![];
         match metadata(index_path.clone()) {
             Ok(meta) => {
@@ -512,13 +534,12 @@ impl RsCaptionIndex {
             docs.extend(chunk_docs);
         }
 
-        obj.init(RsCaptionIndex {
+        Ok(RsCaptionIndex {
             _impl: _RsCaptionIndexImpl {
                 docs: docs, data: index_mmaps, datum_size: datum_size,
                 start_time_size: start_time_size, end_time_size: end_time_size
             },
             debug: debug
-        });
-        Ok(())
+        })
     }
 }

@@ -10,6 +10,5 @@ crate-type = ["cdylib"]
 [dependencies]
 memmap = "0.7.0"
 byteorder = "1.2.7"
-rayon = "1.0.3"
 rand = "0.6.1"
-pyo3 = { version = "0.8.2", features = ["extension-module"] }
+pyo3 = { version = "0.10.1", features = ["extension-module"] }
