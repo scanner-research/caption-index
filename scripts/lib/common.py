@@ -1,18 +1,12 @@
-from collections import Counter
-from multiprocessing import Pool
 import os
 import sys
 from subprocess import check_call
-from typing import List, NamedTuple, Optional
+from typing import List, Dict, NamedTuple, Optional
 
-from tqdm import tqdm
+from captions import BinaryFormat, Lexicon, Documents
+from captions.rs_captions import indexer
 
-from captions import BinaryFormat
-from captions.indexer import get_document_word_counts
-
-DEFAULT_PARALLELISM = os.cpu_count()
-
-BINARY_FORMAT = BinaryFormat.default()
+BINARY_FORMAT = BinaryFormat()
 MAX_WORD_LEN = 20
 
 STDIN_DELIM = '\t'
@@ -52,39 +46,25 @@ def merge_files(
                 for p in batch_paths:
                     os.remove(p)
 
-
-def _get_batch_word_counts(doc_paths: List[str]):
-    words = Counter()
-    for doc_path in doc_paths:
-        get_document_word_counts(
-            doc_path, max_word_len=MAX_WORD_LEN, words=words)
-    return len(doc_paths), list(words.items())
-
-
 def get_word_counts(
         docs_to_index: List[DocumentToIndex],
-        parallelism: int,
-        batch_size: Optional[int] = None    # use batches to reduce
-                                            # communication overhead
-) -> Counter:
-    words = Counter()
+        batch_size: Optional[int] = None
+) -> Dict[str, int]:
     if batch_size is None:
         batch_size = int(len(docs_to_index) / 10 / os.cpu_count())
         batch_size = min(max(batch_size, 1), 1000)
     assert batch_size > 0
-
-    batch_args = []
-    for i in range(0, len(docs_to_index), batch_size):
-        batch_args.append([d.path for d in docs_to_index[i:i + batch_size]])
-
-    with Pool(processes=parallelism) as pool, \
-            tqdm(desc='Building lexicon', total=len(docs_to_index)) as pbar:
-        for n, result in pool.imap_unordered(
-                _get_batch_word_counts, batch_args
-        ):
-            for k, v in result:
-                words[k] += v
-            pbar.update(n)
-
+    doc_paths = [d.path for d in docs_to_index]
+    words = indexer.count_tokens(doc_paths, MAX_WORD_LEN, batch_size, True)
     print('Lexicon size: {}'.format(len(words)))
     return words
+
+
+def index_documents(
+        index_and_doc_paths, lexicon: Lexicon,
+        binary_format: BinaryFormat = BINARY_FORMAT
+):
+    indexer.index_documents(
+        index_and_doc_paths, {w.token: w.id for w in lexicon}, True,
+        binary_format.datum_bytes, binary_format.start_time_bytes,
+        binary_format.end_time_bytes)

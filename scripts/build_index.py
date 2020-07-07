@@ -13,17 +13,14 @@ This will produce:
 import argparse
 import os
 import shutil
-from multiprocessing import Pool
+from collections import defaultdict
 from typing import List, Optional
-from tqdm import tqdm
 
 from captions import Lexicon, Documents
-from captions.indexer import index_document
-from captions.tokenize import AlignmentTokenizer
 
 from lib.common import (
-    DEFAULT_PARALLELISM, DocumentToIndex, read_docs_from_stdin, list_docs,
-    merge_files, get_word_counts)
+    DocumentToIndex, read_docs_from_stdin, list_docs,
+    get_word_counts, index_documents)
 
 DEFAULT_OUT_DIR = 'out'
 
@@ -34,87 +31,59 @@ def get_args():
                    help='Directory containing captions. If not passed, read from stdin.')
     p.add_argument('-o', dest='out_dir', type=str, default=DEFAULT_OUT_DIR,
                    help='Output directory. Default: {}'.format(DEFAULT_OUT_DIR))
-    p.add_argument('-j', dest='parallelism', type=int, default=DEFAULT_PARALLELISM,
-                   help='Number of CPU cores to use. Default: {}'.format(DEFAULT_PARALLELISM))
     p.add_argument('--chunk-size', dest='chunk_size', type=int,
                    help='Break the index into chunks of n documents')
-    p.add_argument('--keep-tmp-files', dest='keep_tmp_files',
-                   action='store_true', help='Keeps per document index files')
     return p.parse_args()
-
-
-def init_index_worker(function, lexicon_path: str):
-    function.lexicon = Lexicon.load(lexicon_path)
-
-
-def index_single_doc(args):
-    doc_id, doc_path, index_path, data_path = args
-    index_document(doc_id, doc_path, index_single_doc.lexicon,
-                   index_path, data_path,
-                   tokenizer=AlignmentTokenizer())
-index_single_doc.lexicon = None
 
 
 def index_all_docs(
         docs_to_index: List[DocumentToIndex],
         documents: Documents,
-        lexicon_path: Lexicon,
+        lexicon: Lexicon,
         index_out_path: str,
         data_out_dir: str,
-        tmp_dir: str,
         chunk_size: Optional[int],
-        parallelism: int,
-        keep_tmp_files: bool
 ):
     """Builds inverted indexes and reencode documents in binary"""
     assert len(docs_to_index) == len(documents)
+    if chunk_size is not None:
+        os.makedirs(index_out_path)
 
-    with Pool(
-            processes=parallelism, initializer=init_index_worker,
-            initargs=(index_single_doc, lexicon_path)
-    ) as pool:
-        worker_args = []
-        doc_index_paths = []
-        for doc_to_index, doc in zip(docs_to_index, documents):
-            assert doc_to_index.name == doc.name
-            doc_index_out_path = os.path.join(
-                tmp_dir, '{:07d}.bin'.format(doc.id))
-            doc_data_out_path = os.path.join(
-                data_out_dir, '{}.bin'.format(doc.id))
-            worker_args.append((doc.id, doc_to_index.path, doc_index_out_path,
-                                doc_data_out_path))
-            doc_index_paths.append(doc_index_out_path)
-
-        for _ in tqdm(pool.imap_unordered(index_single_doc, worker_args),
-                      desc='Indexing', total=len(worker_args)):
-            pass
-
+    index_and_doc_paths = defaultdict(list)
+    for doc_to_index, doc in zip(docs_to_index, documents):
+        assert doc_to_index.name == doc.name
         if chunk_size is None:
-            merge_files(doc_index_paths, index_out_path,
-                        keep_tmp_files=keep_tmp_files)
+            doc_index_out_path = index_out_path
+        elif chunk_size == 1:
+            doc_index_out_path = os.path.join(
+                index_out_path, '{:07d}.bin'.format(doc.id))
         else:
-            os.makedirs(index_out_path)
-            for i in range(0, len(doc_index_paths), chunk_size):
-                out_file = '{:07d}-{:07d}.bin'.format(
-                    i, min(i + chunk_size, len(doc_index_paths)))
-                merge_files(doc_index_paths[i:i + chunk_size],
-                            os.path.join(index_out_path, out_file),
-                            keep_tmp_files=keep_tmp_files)
+            base_idx = int(doc.id / chunk_size) * chunk_size
+            doc_index_out_path = os.path.join(
+                index_out_path, '{:07d}-{:07d}.bin'.format(
+                    base_idx, min(base_idx + chunk_size, len(docs_to_index))))
+        doc_data_out_path = os.path.join(
+            data_out_dir, '{}.bin'.format(doc.id))
+
+        index_and_doc_paths[doc_index_out_path].append(
+            (doc.id, doc_to_index.path, doc_data_out_path))
+
+    index_documents(list(index_and_doc_paths.items()), lexicon)
 
 
 def build_lexicon(
         docs_to_index: List[DocumentToIndex],
         lex_path: str,
-        parallelism: int
 ) -> Lexicon:
     print('Building lexicon: {}'.format(lex_path))
-    word_counts = get_word_counts(docs_to_index, parallelism)
+    word_counts = get_word_counts(docs_to_index)
     lexicon = Lexicon([
         Lexicon.Word(i, w, word_counts[w])
         for i, w in enumerate(sorted(word_counts.keys()))
     ])
     print('Storing lexicon: {}'.format(lex_path))
     lexicon.store(lex_path)
+    return lexicon
 
 
 def remove_if_exists(fpath):
@@ -126,12 +95,9 @@ def remove_if_exists(fpath):
 
 def main(
         out_dir: str, doc_dir: Optional[str],
-        parallelism: int = DEFAULT_PARALLELISM,
-        chunk_size: Optional[int] = None,
-        keep_tmp_files: bool = False
+        chunk_size: Optional[int] = None
 ):
     assert chunk_size is None or chunk_size > 0
-    assert parallelism > 0
 
     # Load document names
     if doc_dir:
@@ -144,8 +110,10 @@ def main(
     # Load or build a lexicon
     lex_path = os.path.join(out_dir, 'lexicon.txt')
     if not os.path.exists(lex_path):
-        build_lexicon(docs_to_index, lex_path, parallelism)
-    assert os.path.exists(lex_path), 'Missing: {}'.format(lex_path)
+        lexicon = build_lexicon(docs_to_index, lex_path)
+        assert os.path.exists(lex_path), 'Missing: {}'.format(lex_path)
+    else:
+        lexicon = Lexicon.load(lex_path)
 
     # Build and store the document list
     docs_path = os.path.join(out_dir, 'documents.txt')
@@ -158,20 +126,14 @@ def main(
     assert os.path.exists(docs_path), 'Missing: {}'.format(docs_path)
 
     # Build inverted index chunks and reencode the documents
-    tmp_dir = os.path.join(out_dir, 'index.tmp')
     index_path = os.path.join(out_dir, 'index.bin')
     data_dir = os.path.join(out_dir, 'data')
     remove_if_exists(index_path)
     remove_if_exists(data_dir)
 
     os.makedirs(data_dir)
-    os.makedirs(tmp_dir)
-    try:
-        index_all_docs(docs_to_index, documents, lex_path, index_path, data_dir,
-                       tmp_dir, chunk_size, parallelism, keep_tmp_files)
-    finally:
-        if not keep_tmp_files and os.path.exists(tmp_dir):
-            shutil.rmtree(tmp_dir)
+    index_all_docs(docs_to_index, documents, lexicon, index_path, data_dir,
+                   chunk_size)
 
     assert os.path.exists(index_path), 'Missing: {}'.format(index_path)
     print('Done!')

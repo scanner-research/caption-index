@@ -7,7 +7,7 @@ import csv
 import struct
 from abc import ABC
 import collections.abc
-from typing import (Iterable, List, Set, Tuple, NamedTuple,
+from typing import (Iterable, List, Set, NamedTuple,
                     Union, Optional, Generator, Sequence)
 
 from .lemmatize import default_lemmatizer
@@ -279,7 +279,7 @@ class Documents:
     ):
         """Set up path and binary format"""
         if binary_format is None:
-            binary_format = BinaryFormat.default()
+            binary_format = BinaryFormat()
         self._binary_format = binary_format
         self._data_dir = data_dir
         self._debug = debug
@@ -321,8 +321,8 @@ class DocumentData:
                 raise FileNotFoundError(data_path)
         self._rs_document_data = RsDocumentData(
             id, data_path, datum_size=binary_format.datum_bytes,
-            start_time_size=binary_format._start_time_bytes,
-            end_time_size=binary_format._end_time_bytes,
+            start_time_size=binary_format.start_time_bytes,
+            end_time_size=binary_format.end_time_bytes,
             debug=debug)
         self._id = id
 
@@ -383,7 +383,7 @@ class _BaseIndex(ABC):
             self._to_document_id(d) for d in docs]
 
     def _to_words(
-        self, word: OneOrMoreWords
+            self, word: OneOrMoreWords
     ) -> List[Lexicon.Word]:
         if isinstance(word, Lexicon.Word):
             return [word]
@@ -424,12 +424,12 @@ class CaptionIndex(_BaseIndex):
         self._tokenizer = tokenizer
 
         if binary_format is None:
-            binary_format = BinaryFormat.default()
+            binary_format = BinaryFormat()
 
         self._rs_index = RsCaptionIndex(
             path, datum_size=binary_format.datum_bytes,
-            start_time_size=binary_format._start_time_bytes,
-            end_time_size=binary_format._end_time_bytes,
+            start_time_size=binary_format.start_time_bytes,
+            end_time_size=binary_format.end_time_bytes,
             debug=debug)
 
     def __require_open_index(f):
@@ -586,103 +586,10 @@ class CaptionIndex(_BaseIndex):
                     for p in struct.iter_unpack('<ffIB', self._bin_data)]
 
 
-class BinaryFormat:
+class BinaryFormat(NamedTuple):
     """
-    Binary data formatter for writing and reading the indexes
-
-    Supports 4 data types:
-        - u32
-        - time interval
-        - datum
-        - byte
+    Defines the number of bytes to use when encoding data
     """
-
-    class Config(NamedTuple):
-        start_time_bytes: int = 4   # Number of bytes to encode start times
-        end_time_bytes: int = 2     # Number of bytes to encode end - start
-        datum_bytes: int = 3        # Number of bytes to encode other data
-
-    def __init__(self, config: 'BinaryFormat.Config'):
-        self._endian = 'little'
-
-        assert config.start_time_bytes > 0
-        assert config.end_time_bytes > 0
-        self._start_time_bytes = config.start_time_bytes
-        self._end_time_bytes = config.end_time_bytes
-
-        assert config.datum_bytes > 0
-        self._datum_bytes = config.datum_bytes
-
-        # Derived values
-        self._time_interval_bytes = (
-            config.start_time_bytes + config.end_time_bytes)
-        self._max_time_interval = (
-            2 ** (8 * (config.start_time_bytes - config.end_time_bytes)) - 1)
-        self._max_datum_value = 2 ** (config.datum_bytes * 8) - 1
-
-    @property
-    def u32_bytes(self) -> int:
-        return 4
-
-    @property
-    def time_interval_bytes(self) -> int:
-        return self._time_interval_bytes
-
-    @property
-    def datum_bytes(self) -> int:
-        return self._datum_bytes
-
-    @property
-    def max_time_interval(self) -> int:
-        """Largest number of milliseconds between start and end times"""
-        return self._max_time_interval
-
-    @property
-    def max_datum_value(self) -> int:
-        """Largest value that can be serialized"""
-        return self._max_datum_value
-
-    def encode_u32(self, data: int) -> bytes:
-        assert isinstance(data, int)
-        return (data).to_bytes(4, self._endian)
-
-    def encode_time_interval(self, start: int, end: int) -> bytes:
-        assert isinstance(start, int)
-        assert isinstance(end, int)
-        diff = end - start
-        if diff < 0:
-            raise ValueError(
-                'start cannot exceed end: {} > {}'.format(start, end))
-        if diff > self.max_time_interval:
-            raise ValueError('end - start > {}'.format(self.max_time_interval))
-        return (
-            (start).to_bytes(self._start_time_bytes, self._endian)
-            + (diff).to_bytes(self._end_time_bytes, self._endian))
-
-    def encode_datum(self, i: int) -> bytes:
-        assert isinstance(i, int)
-        if i < 0:
-            raise ValueError('Out of range: {} < 0'.format(i))
-        if i > self._max_datum_value:
-            raise ValueError(
-                'Out of range: {} > {}'.format(i, self._max_datum_value))
-        return (i).to_bytes(self._datum_bytes, self._endian)
-
-    def _decode_u32(self, s: bytes) -> int:
-        assert len(s) == 4, '{} is the wrong length'.format(len(s))
-        return int.from_bytes(s, self._endian)
-
-    def _decode_time_interval(self, s: bytes) -> Tuple[int, int]:
-        assert len(s) == self.time_interval_bytes
-        start = int.from_bytes(s[:self._start_time_bytes], self._endian)
-        diff = int.from_bytes(s[self._start_time_bytes:], self._endian)
-        return start, start + diff
-
-    def _decode_datum(self, s: bytes) -> int:
-        assert len(s) == self._datum_bytes, \
-            '{} is the wrong length'.format(len(s))
-        return int.from_bytes(s, self._endian)
-
-    @staticmethod
-    def default() -> 'BinaryFormat':
-        return BinaryFormat(BinaryFormat.Config())
+    start_time_bytes: int = 4   # Number of bytes to encode start times
+    end_time_bytes: int = 2     # Number of bytes to encode end - start
+    datum_bytes: int = 3        # Number of bytes to encode other data

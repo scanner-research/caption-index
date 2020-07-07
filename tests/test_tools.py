@@ -78,27 +78,6 @@ def test_lemmatize():
     assert lexicon['DUCK'].id in lexicon.similar('DUCKS')
 
 
-def test_binary_format():
-    bf = captions.BinaryFormat.default()
-    assert 0 == bf._decode_datum(bf.encode_datum(0))
-    assert 111 == bf._decode_datum(bf.encode_datum(111))
-    assert bf.max_datum_value == \
-        bf._decode_datum(bf.encode_datum(bf.max_datum_value))
-
-    assert 0 == bf._decode_u32(bf.encode_u32(0))
-    assert 111 == bf._decode_u32(bf.encode_u32(111))
-    assert bf.max_datum_value == \
-        bf._decode_u32(bf.encode_u32(bf.max_datum_value))
-
-    assert (0, 0) == bf._decode_time_interval(bf.encode_time_interval(0, 0))
-    assert (0, 100) == bf._decode_time_interval(bf.encode_time_interval(0, 100))
-    assert (777, 888) == bf._decode_time_interval(
-        bf.encode_time_interval(777, 888))
-    assert (76543210, 76543210 + bf.max_time_interval) == \
-        bf._decode_time_interval(bf.encode_time_interval(
-            76543210, 76543210 + bf.max_time_interval))
-
-
 def test_inverted_index():
     idx_dir = os.path.join(TMP_DIR, TEST_INDEX_SUBDIR)
     idx_path = os.path.join(idx_dir, 'index.bin')

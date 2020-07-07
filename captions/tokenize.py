@@ -1,7 +1,7 @@
-import string
-import re
 from abc import ABC, abstractmethod
 from typing import List
+
+from .rs_captions import tokenize
 
 
 class Tokenizer(ABC):
@@ -11,43 +11,10 @@ class Tokenizer(ABC):
         pass
 
 
-def _sanitize(t: str) -> str:
-    return ''.join(filter(lambda x: x in string.printable, t)).strip()
-
-
-class SpacyTokenizer(Tokenizer):
-
-    def __init__(self):
-        # Lazy import
-        import spacy
-        self._tokenizer = spacy.load('en', disable=['tagger', 'parser', 'ner'])
-
-    def tokens(self, text: str) -> List[str]:
-        tokens = (_sanitize(t.text) for t in self._tokenizer(text))
-        return [t for t in tokens if t]
-
-
 class BasicTokenizer(Tokenizer):
 
-    def __init__(self):
-        self._re = re.compile(r'[.,!?:;(){}[\]`|"\']')
-
     def tokens(self, text: str) -> List[str]:
-        result = []
-        for t in _sanitize(text).split():
-            if len(t) == 0:
-                continue
-            i = 0
-            for m in self._re.finditer(t):
-                token = t[i:m.start(0)]
-                if token:
-                    result.append(token)
-                result.append(m.group(0))
-                i = m.end(0)
-            remainder = t[i:]
-            if remainder:
-                result.append(remainder)
-        return result
+        return tokenize(text)
 
 
 class AlignmentTokenizer(Tokenizer):
@@ -59,7 +26,7 @@ class AlignmentTokenizer(Tokenizer):
     def tokens(self, text: str) -> List[str]:
         if text[0] == '{' and text[-1] == '}':
             text = text[1:-1]
-        return self._tokenizer.tokens(text)
+        return tokenize(text)
 
 
 _DEFAULT_TOKENIZER = None

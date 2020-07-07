@@ -39,9 +39,7 @@ def dummy_data():
         check_call(['tar', '-xzf', TEST_DATA_PATH, '-C', subs_dir])
 
         # Build the index
-        check_call([
-            BUILD_INDEX_SCRIPT, '-d', subs_dir, '-o', idx_dir,
-            '--keep-tmp-files'])
+        check_call([BUILD_INDEX_SCRIPT, '-d', subs_dir, '-o', idx_dir])
         assert os.path.isdir(idx_dir)
 
     try:
@@ -85,20 +83,6 @@ def test_search():
         assert count_and_test(index, test_document, ['CLOCK', 'STRIKES']) == 2
         assert count_and_test(index, test_document, ['>>']) == 149
         assert count_and_test(index, test_document, ['SEE', '?']) == 1
-
-    # Make a chunked copy
-    chunked_idx_path = os.path.join(idx_dir, 'index.tmp')
-    assert len(os.listdir(chunked_idx_path)) > 0
-    with captions.CaptionIndex(chunked_idx_path, lexicon, documents) as index2:
-        assert count_and_test(index2, test_document, ['THEY']) == 12
-        assert count_and_test(index2, test_document, ['PEOPLE']) == 12
-        assert count_and_test(index2, test_document, ['TO', 'THE']) == 9    # one wraps
-        assert count_and_test(index2, test_document, ['GIBSON', 'GUITAR', 'DROP']) == 1
-        assert count_and_test(index2, test_document, ['PUT', 'THAT', 'DOWN']) == 1
-        assert count_and_test(index2, test_document, ['CLOCK', 'STRIKES']) == 2
-        assert count_and_test(index2, test_document, ['>>']) == 149
-        assert count_and_test(index2, test_document, ['SEE', '?']) == 1
-    shutil.rmtree(chunked_idx_path)
 
 
 def test_search_position():
