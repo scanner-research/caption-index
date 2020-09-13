@@ -193,24 +193,24 @@ impl _RsCaptionIndexImpl {
                 (time_int.0, time_int.1, pos, 1)
             };
 
-            let mut iter_idxs = vec![0u32; posting_offsets.len()];
+            let mut iter_idxs = vec![0usize; posting_offsets.len()];
             let mut heap = BinaryHeap::new();
             let mut postings = Vec::with_capacity(
                 posting_offsets.iter().map(|ofs| ofs.1).sum::<u32>() as usize);
             for i in 0..posting_offsets.len() {
                 heap.push(HeapPosting {
                     origin: i,
-                    posting: read_single_posting(posting_offsets[i].0)
+                    posting: read_single_posting(posting_offsets[i].0 + iter_idxs[i])
                 });
                 iter_idxs[i] += 1;
             }
 
             while let Some(HeapPosting { posting, origin }) = heap.pop() {
                 postings.push(posting);
-                if iter_idxs[origin] < posting_offsets[origin].1 {
+                if iter_idxs[origin] < posting_offsets[origin].1 as usize {
                     heap.push(HeapPosting {
                         origin: origin,
-                        posting: read_single_posting(posting_offsets[origin].0)
+                        posting: read_single_posting(posting_offsets[origin].0 + iter_idxs[origin])
                     });
                     iter_idxs[origin] += 1;
                 }
