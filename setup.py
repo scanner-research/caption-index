@@ -23,7 +23,7 @@ install_requires = [
     'pyvtt>=0.0.2',
     'pytest>=4.0.1',
     'PyYAML>=3.13',
-    'spacy>=3.1.1',
+    'nltk>=3.6.2',
     'termcolor>=1.1.0',
     'tqdm>=4.28.1',
 ]
