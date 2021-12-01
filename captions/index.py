@@ -66,6 +66,8 @@ class Lexicon:
         else:
             self._lemmas = None
             self._lemmatizer = None
+        self.__init_case_insensitivity()
+        assert self._case_insensitive_matches is not None
 
     def __iter__(self):
         # Iterate lexicon in id order
@@ -126,6 +128,18 @@ class Lexicon:
             results.update(self._lemmas.get(lem, []))
         return results
 
+    def case_insensitive(self, key: WordIdOrString) -> Optional[Set[int]]:
+        """
+        Return words that differ only by case.
+        Returns none if no other words match,
+        otherwise a set including the query word.
+        """
+        if isinstance(key, Lexicon.Word):
+            w = key
+        else:
+            w = self.__getitem__(key)
+        return self._case_insensitive_matches.get(w.token.lower(), None)
+
     def decode(self, key: WordIdOrString,
                default: Optional[str] = None) -> str:
         """Convert words to strings"""
@@ -171,6 +185,16 @@ class Lexicon:
                 lemmas[lem].add(w.id)
         self._lemmatizer = lemmatizer
         self._lemmas = lemmas
+
+    def __init_case_insensitivity(self) -> None:
+        matches = {}
+        for w in self._words:
+            t_lower = w.token.lower()
+            if t_lower not in matches:
+                matches[t_lower] = set()
+            matches[t_lower].add(w.id)
+        self._case_insensitive_matches = {
+            k: frozenset(v) for k, v in matches.items() if len(v) > 1}
 
 
 class Documents:

@@ -123,6 +123,7 @@ class _Expr(ABC):
         index: CaptionIndex
         documents: Optional[Iterable[CaptionIndex.DocIdOrDocument]]
         ignore_word_not_found: bool
+        case_insensitive: bool
 
     @abstractmethod
     def eval(self, context: '_Expr.Context') -> Iterable[CaptionIndex.Document]:
@@ -186,13 +187,19 @@ class _Phrase(_Expr):
                 ngram_tokens.append(tokens)
             else:
                 try:
-                    token = context.lexicon[t.text]
+                    tokens = [context.lexicon[t.text]]
+                    if context.case_insensitive:
+                        matches = context.lexicon.case_insensitive(tokens[0])
+                        if matches is not None:
+                            # Some other words exist
+                            assert len(matches) > 0
+                            tokens = [context.lexicon[x] for x in matches]
                 except Lexicon.WordDoesNotExist:
                     if context.ignore_word_not_found:
                         return
                     else:
                         raise
-                ngram_tokens.append([token])
+                ngram_tokens.append(tokens)
 
         for d in context.index.ngram_search(*ngram_tokens, **kwargs):
             yield d
@@ -209,6 +216,7 @@ class _Phrase(_Expr):
                           lexicon.similar(t.text)]
                 token_count += sum(x.count for x in tokens)
             else:
+                # FIXME: Case insensitivity not considered here
                 try:
                     token = lexicon[t.text]
                     token_count += token.count
@@ -491,10 +499,11 @@ class Query:
 
     def execute(
         self, lexicon: Lexicon, index: CaptionIndex, documents=None,
-        ignore_word_not_found=True
+        ignore_word_not_found=True, case_insensitive=False
     ) -> Iterable[CaptionIndex.Document]:
         return self._tree.eval(_Expr.Context(
-            lexicon, index, documents, ignore_word_not_found))
+            lexicon, index, documents, ignore_word_not_found,
+            case_insensitive))
 
     def estimate_cost(self, lexicon: Lexicon) -> float:
         return self._tree.estimate_cost(lexicon)
